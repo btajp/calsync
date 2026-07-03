@@ -1,6 +1,6 @@
 module github.com/work-a-co/calsync
 
-go 1.25.8
+go 1.24
 
 require github.com/stretchr/testify v1.11.1
 
