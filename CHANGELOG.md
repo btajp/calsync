@@ -39,7 +39,7 @@
 ### 実機検証の状況(2026-07-03)
 
 - 実 Google / Microsoft API で確認済み: OAuth 認可(両プロバイダ・未検証アプリのクリックスルー含む)、最小スコープでの疎通(Google `calendar.events` のみ / MSA の `MailboxSettings.Read`)、双方向の差分同期(syncToken / calendarView delta)、双方向のブロッカー作成(6件+1件)、transparent な終日予定の除外
-- 未実測(設計書 15 章のスパイクリスト参照): Graph 終日イベントの UTC 変換挙動、Google 409 での cancelled ブロッカー蘇生
+- 2026-07-04 追記: Graph 終日イベントの取り込み(日付ズレなし)、手動削除ブロッカーのリコンサイル復元と Google 409 蘇生(繰り返しインスタンス由来含む)、DB 全損からのタグ再構築を実機確認 — 主要スパイクは全消化(残りは設計書 15 章参照、低リスクの参考確認のみ)
 - 2026-07-04 追記: `docker build`(33.5MB イメージ)と `docker compose up -d` での常駐稼働を実機確認。6アカウント(Google×4 + Microsoft 個人 + Gmail 個人)・元予定 526 件・ブロッカー 2,630 件のバックフィルと毎分ポーリングの継続稼働、Graph 一時 504 のアカウント分離も実運用で確認
 
 ### 既知の制約(v1)
