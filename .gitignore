@@ -1,0 +1,4 @@
+# ローカル実行用の成果物(リポジトリには含めない)
+/calsync
+/data/
+/calsync.yaml
