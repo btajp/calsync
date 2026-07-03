@@ -339,6 +339,7 @@ accounts:
     email: user@gmail.com
     calendars: [primary]        # 監視対象(Google は複数可)
     blocker_calendar: primary   # ブロッカー書き込み先(既定 primary)
+    show_origin_in_description: true  # このカレンダーのブロッカー説明欄に元アカウント ID を記載(既定 false・遡及はリコンサイル時)
   - id: work-ms
     provider: microsoft
     email: user@example365.co.jp

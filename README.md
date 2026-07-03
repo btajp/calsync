@@ -160,6 +160,22 @@ docker compose start calsync
 
 共通フラグ: `--config`(既定 `calsync.yaml`)、`--data`(既定 `./data`)
 
+## ブロッカーの元アカウント表示(オプション)
+
+既定ではブロッカーは「予定あり」のみで、どのアカウント由来かは表示されません(意図的な匿名設計)。**自分のカレンダー単位**で説明欄に元アカウントの ID を表示したい場合は、そのアカウントに `show_origin_in_description: true` を設定します:
+
+```yaml
+accounts:
+  - id: personal
+    provider: google
+    email: you@gmail.com
+    show_origin_in_description: true   # personal のカレンダーに作られるブロッカーの説明欄に「calsync: ミラー元アカウント = <id>」を記載
+```
+
+- 記載されるのは YAML の `id` のみ(メールアドレスは記載しません)
+- 設定の ON/OFF は**次回のリコンサイル(毎日 04:00 または `calsync reconcile`)で既存ブロッカーにも遡及反映**されます
+- 説明欄はそのカレンダーの共有設定によっては第三者に見える可能性があります。組織のカレンダーでは慎重に判断してください
+
 ## アカウントの削除
 
 **必ず `calsync accounts remove <id>` を実行してから、calsync.yaml からそのアカウントのエントリを削除してください。順序を逆にしないでください。**

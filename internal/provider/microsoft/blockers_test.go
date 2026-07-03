@@ -377,3 +377,41 @@ func TestGetCalendarTimezone(t *testing.T) {
 	require.Equal(t, "/me/mailboxSettings/timeZone", reqs[0].URL)
 	requireCommonHeaders(t, reqs)
 }
+
+func TestGraphBlockerDescriptionSentAndCleared(t *testing.T) {
+	var created, patched map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/me/events", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&created)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"blk1"}`)
+	})
+	mux.HandleFunc("/me/events/blk1", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&patched)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"blk1"}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c := newTestClient(t, srv.URL, []string{"busy"})
+
+	b := model.Blocker{
+		Title:       "予定あり",
+		StartUTC:    time.Date(2026, 7, 10, 1, 0, 0, 0, time.UTC),
+		EndUTC:      time.Date(2026, 7, 10, 2, 0, 0, 0, time.UTC),
+		OriginTag:   "a:ev1",
+		Description: "calsync: ミラー元アカウント = a",
+	}
+	_, err := c.CreateBlocker(context.Background(), testCal, b, "txn1")
+	require.NoError(t, err)
+	body, ok := created["body"].(map[string]any)
+	require.True(t, ok, "作成ボディに body(説明)が入る")
+	require.Equal(t, "text", body["contentType"])
+	require.Equal(t, "calsync: ミラー元アカウント = a", body["content"])
+
+	b.Description = ""
+	require.NoError(t, c.UpdateBlocker(context.Background(), testCal, "blk1", b))
+	pb, ok := patched["body"].(map[string]any)
+	require.True(t, ok, "patch は body キーを常に含む(空でクリア)")
+	require.Equal(t, "", pb["content"])
+}

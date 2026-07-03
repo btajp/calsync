@@ -41,6 +41,7 @@ type Blocker struct {
 	AllDayEnd      string
 	TargetTimezone string // 終日ブロッカー作成用(Graph はこのTZの midnight 境界で作る)
 	OriginTag      string
+	Description    string // 空なら説明なし(既定)。ターゲット側のオプトインで origin 情報を記載(Issue #7)
 }
 
 type BlockerRecord struct {

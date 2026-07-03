@@ -216,7 +216,7 @@ func TestCreateBlockerConflictResurrectsCancelledEvent(t *testing.T) {
 	require.Equal(t, "2026-07-10T02:00:00Z", end["dateTime"])
 }
 
-func TestUpdateBlockerPatchesTimesOnly(t *testing.T) {
+func TestUpdateBlockerPatchesTimesAndDescription(t *testing.T) {
 	rec := &recorder{}
 	handler := rec.wrap(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -238,7 +238,7 @@ func TestUpdateBlockerPatchesTimesOnly(t *testing.T) {
 	require.Equal(t, "/calendars/primary/events/ev-blk-1", reqs[0].Path)
 
 	m := decodeBody(t, reqs[0].Body)
-	require.ElementsMatch(t, []string{"start", "end"}, mapKeys(m), "patch は start/end のみ")
+	require.ElementsMatch(t, []string{"start", "end", "description"}, mapKeys(m), "patch は start/end のみ")
 	start, ok := m["start"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "2026-07-11T03:00:00Z", start["dateTime"])
@@ -392,4 +392,38 @@ func TestGetCalendarTimezoneMissingIsError(t *testing.T) {
 	_, err := c.GetCalendarTimezone(context.Background(), testRef)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no timeZone")
+}
+
+func TestBlockerDescriptionSentAndCleared(t *testing.T) {
+	var created, patched map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /calendars/primary/events", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&created)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"blk1","status":"confirmed"}`)
+	})
+	mux.HandleFunc("PATCH /calendars/primary/events/blk1", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&patched)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"blk1"}`)
+	})
+	c := newTestClient(t, mux)
+
+	b := model.Blocker{
+		Title:       "予定あり",
+		StartUTC:    time.Date(2026, 7, 10, 1, 0, 0, 0, time.UTC),
+		EndUTC:      time.Date(2026, 7, 10, 2, 0, 0, 0, time.UTC),
+		OriginTag:   "a:ev1",
+		Description: "calsync: ミラー元アカウント = a",
+	}
+	_, err := c.CreateBlocker(context.Background(), testRef, b, "csidem1")
+	require.NoError(t, err)
+	require.Equal(t, "calsync: ミラー元アカウント = a", created["description"], "作成ボディに description が入る")
+
+	// クリア(空文字)も明示送信される(トグル OFF の遡及反映用)
+	b.Description = ""
+	require.NoError(t, c.UpdateBlocker(context.Background(), testRef, "blk1", b))
+	v, present := patched["description"]
+	require.True(t, present, "patch は description キーを常に含む(空でクリア)")
+	require.Equal(t, "", v)
 }

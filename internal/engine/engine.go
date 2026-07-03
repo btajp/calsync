@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/work-a-co/calsync/internal/config"
@@ -196,6 +197,8 @@ func (e *Engine) upsertBlockers(ctx context.Context, ref model.CalendarRef, ev m
 // mapping あり・time_hash 不一致 → UpdateBlocker(patch)。404 は再作成にフォールバック
 // mapping あり・一致 → 何もしない
 func (e *Engine) upsertBlockerOnTarget(ctx context.Context, ref model.CalendarRef, ev model.NormalizedEvent, target config.Account, originTag, timeHash string) error {
+	// description ポリシーを合成した変更検出ハッシュ(トグルの遡及反映用。Issue #7)
+	timeHash = e.policyHashFor(timeHash, target.ID)
 	m, err := e.Store.GetMapping(ref.AccountID, ref.CalendarID, ev.ID, target.ID)
 	if err != nil {
 		return err
@@ -312,6 +315,28 @@ func (e *Engine) deleteBlockersForOrigin(ctx context.Context, ref model.Calendar
 // 時刻指定は両プロバイダとも UTC 固定で送る)ため、IsAllDay のときだけ取得する。
 // 取得時は calendars.timezone のキャッシュを優先し、無ければ provider から
 // 取得して calendars テーブルへキャッシュする。
+// descriptionFor はターゲットのオプトイン(show_origin_in_description)に応じて
+// ブロッカーの説明文を返す。既定は空(完全匿名)。ID のみでメールアドレスは含めない。
+func (e *Engine) descriptionFor(targetAccountID, originTag string) string {
+	t := e.Cfg.AccountByID(targetAccountID)
+	if t == nil || !t.ShowOriginInDescription {
+		return ""
+	}
+	originID, _, _ := strings.Cut(originTag, ":")
+	return "calsync: ミラー元アカウント = " + originID
+}
+
+// policyHashFor は mappings に保存する変更検出ハッシュを返す。時刻ハッシュに
+// description ポリシーの成分を合成することで、フラグのトグルが「ハッシュ不一致」
+// として検出され、次回リコンサイル(FullResync の全件再処理)で既存ブロッカーにも
+// 遡及反映される。全ターゲットが既定 OFF の間は素の TimeHash と同値(移行無風)。
+func (e *Engine) policyHashFor(timeHash, targetAccountID string) string {
+	if t := e.Cfg.AccountByID(targetAccountID); t != nil && t.ShowOriginInDescription {
+		return timeHash + "+desc"
+	}
+	return timeHash
+}
+
 func (e *Engine) blockerFor(ctx context.Context, ev model.NormalizedEvent, originTag string, targetCal model.CalendarRef, p provider.Provider) (model.Blocker, error) {
 	tz := ""
 	if ev.IsAllDay {
@@ -330,6 +355,7 @@ func (e *Engine) blockerFor(ctx context.Context, ev model.NormalizedEvent, origi
 		AllDayEnd:      ev.AllDayEnd,
 		TargetTimezone: tz,
 		OriginTag:      originTag,
+		Description:    e.descriptionFor(targetCal.AccountID, originTag),
 	}, nil
 }
 

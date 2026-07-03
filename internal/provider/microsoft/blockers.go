@@ -24,6 +24,7 @@ type singleValueProp struct {
 // graphEventBody is the POST/PATCH payload for blocker events.
 type graphEventBody struct {
 	Subject                       string            `json:"subject"`
+	Body                          *graphItemBody    `json:"body,omitempty"`
 	ShowAs                        string            `json:"showAs"`
 	IsReminderOn                  bool              `json:"isReminderOn"`
 	Sensitivity                   string            `json:"sensitivity"`
@@ -34,12 +35,19 @@ type graphEventBody struct {
 	SingleValueExtendedProperties []singleValueProp `json:"singleValueExtendedProperties"`
 }
 
+// graphItemBody はイベント本文(説明欄)。空文字の content 送信でクリアできる。
+type graphItemBody struct {
+	ContentType string `json:"contentType"`
+	Content     string `json:"content"`
+}
+
 // blockerBody builds the Graph event payload. Timed blockers are written in
 // UTC; all-day blockers use isAllDay=true with midnight bounds in the target
 // calendar's timezone (design doc 6.6: UTC midnight would shift the date).
 // idemKey=="" omits transactionId (it is create-only).
 func blockerBody(b model.Blocker, idemKey string) graphEventBody {
 	body := graphEventBody{
+		Body:          &graphItemBody{ContentType: "text", Content: b.Description},
 		Subject:       b.Title,
 		ShowAs:        "busy",
 		IsReminderOn:  false,

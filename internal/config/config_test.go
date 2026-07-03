@@ -292,3 +292,25 @@ accounts:
 	require.Equal(t, "microsoft", acct.Provider)
 	require.Nil(t, cfg.AccountByID("missing"))
 }
+
+func TestLoadShowOriginInDescription(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "calsync.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+providers:
+  google:
+    credentials_file: /data/g.json
+accounts:
+  - id: a
+    provider: google
+    email: a@example.com
+    show_origin_in_description: true
+  - id: b
+    provider: google
+    email: b@example.com
+`), 0o600))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.True(t, cfg.Accounts[0].ShowOriginInDescription)
+	require.False(t, cfg.Accounts[1].ShowOriginInDescription, "既定は false")
+}
