@@ -2,8 +2,12 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/work-a-co/calsync/internal/model"
+	"github.com/work-a-co/calsync/internal/store"
 )
 
 // FullResync は 1 カレンダーに対するカーソル張り直し + set-difference リコンサイル
@@ -80,4 +84,211 @@ func (e *Engine) FullResync(ctx context.Context, ref model.CalendarRef) error {
 		}
 	}
 	return nil
+}
+
+// Reconcile はフルリコンサイル(仕様8章)。日次スケジュール(Task 18)と
+// `calsync reconcile`(Task 19)から呼ばれる。
+// フェーズ: (1) 全監視カレンダーの FullResync(カーソル張り直し + set-difference)
+// (2) pending 解決 (3) adoption(孤児ブロッカーの収容/掃除)(4) suppressed 再評価。
+// pending 解決を adoption より先に行うのは、pending 行に紐づく作成済みブロッカーを
+// adoption が孤児と誤認して掃除しないため。
+// 1 カレンダーの障害で全体を止めず、エラーは集約して返す(仕様10章)。
+func (e *Engine) Reconcile(ctx context.Context) error {
+	var errs []error
+	for _, acct := range e.Cfg.Accounts {
+		for _, calID := range acct.Calendars {
+			ref := model.CalendarRef{AccountID: acct.ID, CalendarID: calID}
+			if err := e.FullResync(ctx, ref); err != nil {
+				errs = append(errs, fmt.Errorf("full resync %s: %w", ref, err))
+			}
+		}
+	}
+	if err := e.resolvePending(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("resolve pending: %w", err))
+	}
+	if err := e.adoptOrphans(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("adopt orphans: %w", err))
+	}
+	if err := e.reevaluateSuppressed(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("reevaluate suppressed: %w", err))
+	}
+	return errors.Join(errs...)
+}
+
+// resolvePending は pending のまま残った mappings(作成実行と active 更新の間の
+// クラッシュ跡)を解決する(仕様6.4)。origin が events キャッシュに生きていれば
+// 同一冪等キーで CreateBlocker を再実行する — 既に作成済みなら既存 ID が返るため、
+// 実在確認と収容を兼ねる。origin が消えていれば intent ごと破棄する
+// (ブロッカーが作られてしまっていた場合は直後の adoption が掃除する)。
+func (e *Engine) resolvePending(ctx context.Context) error {
+	pend, err := e.Store.ListPendingMappings()
+	if err != nil {
+		return err
+	}
+	for _, m := range pend {
+		originRef := model.CalendarRef{AccountID: m.OriginAccount, CalendarID: m.OriginCalendar}
+		ev, err := e.Store.GetEvent(originRef, m.OriginEventID)
+		if err != nil {
+			return err
+		}
+		if ev == nil {
+			if err := e.Store.DeleteMapping(m.OriginAccount, m.OriginCalendar, m.OriginEventID, m.TargetAccount); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := e.createFromMapping(ctx, m, *ev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// adoptOrphans は各アカウントのブロッカー書き込み先を ListBlockers(タグ検索)で
+// 列挙し、mappings 未登録のタグ付きブロッカー(クラッシュ起因・DB 消失起因の孤児)を
+// origin の実在に応じて収容 or 削除する(仕様8章 3)。DB 全損時の mappings 再構築も
+// この経路で行われる(仕様8章 5)。origin の実在は直前の FullResync で最新化された
+// events キャッシュで判定する。
+func (e *Engine) adoptOrphans(ctx context.Context) error {
+	w := e.currentWindow()
+	for _, acct := range e.Cfg.Accounts {
+		ref := model.CalendarRef{AccountID: acct.ID, CalendarID: acct.BlockerCalendar}
+		p, err := e.providerFor(acct.ID)
+		if err != nil {
+			return err
+		}
+		recs, err := p.ListBlockers(ctx, ref, w)
+		if err != nil {
+			return err
+		}
+		for _, rec := range recs {
+			known, err := e.Store.IsBlocker(acct.ID, rec.EventID)
+			if err != nil {
+				return err
+			}
+			if known {
+				continue // mappings 登録済みの正規ブロッカー
+			}
+			originAcct, originEventID, ok := parseOriginTag(rec.OriginTag)
+			if !ok {
+				continue // タグ形式不正。calsync 製と断定できないため触らない
+			}
+			ev, originCal, err := e.findCachedOriginEvent(originAcct, originEventID)
+			if err != nil {
+				return err
+			}
+			if ev == nil {
+				// origin 消滅(またはアカウントが監視対象外)→ 掃除
+				if err := p.DeleteBlocker(ctx, ref, rec.EventID); err != nil {
+					return err
+				}
+				continue
+			}
+			existing, err := e.Store.GetMapping(originAcct, originCal, originEventID, acct.ID)
+			if err != nil {
+				return err
+			}
+			if existing != nil && existing.BlockerEventID != rec.EventID {
+				// 同じ origin/target 対に別のブロッカー(または suppressed/pending の意図)が
+				// 既に紐づいている → この孤児は重複。掃除
+				if err := p.DeleteBlocker(ctx, ref, rec.EventID); err != nil {
+					return err
+				}
+				continue
+			}
+			// origin 生存 → active として収容(削除・再作成はしない)
+			m := store.Mapping{
+				OriginAccount:  originAcct,
+				OriginCalendar: originCal,
+				OriginEventID:  originEventID,
+				TargetAccount:  acct.ID,
+				TargetCalendar: acct.BlockerCalendar,
+				BlockerEventID: rec.EventID,
+				IdempotencyKey: idemKeyFor(acct.Provider, rec.OriginTag, acct.ID),
+				TimeHash:       rec.TimeHash,
+				Status:         store.StatusActive,
+			}
+			if err := e.Store.PutMapping(m); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// reevaluateSuppressed は suppressed mappings を再評価する(仕様6.5)。
+// 抑止理由だった重複実予定が消えていれば昇格し、origin 自体が消えていれば行を掃除する。
+// 削除通知経由の promoteSuppressed(Task 9)を取り逃がした場合のセーフティネット。
+func (e *Engine) reevaluateSuppressed(ctx context.Context) error {
+	for _, acct := range e.Cfg.Accounts {
+		maps, err := e.Store.ListMappingsWhereTargetAccount(acct.ID)
+		if err != nil {
+			return err
+		}
+		for _, m := range maps {
+			if m.Status != store.StatusSuppressed {
+				continue
+			}
+			originRef := model.CalendarRef{AccountID: m.OriginAccount, CalendarID: m.OriginCalendar}
+			ev, err := e.Store.GetEvent(originRef, m.OriginEventID)
+			if err != nil {
+				return err
+			}
+			if ev == nil {
+				// origin 消滅 → suppressed 行を掃除(ブロッカーは元々存在しない)
+				if err := e.Store.DeleteMapping(m.OriginAccount, m.OriginCalendar, m.OriginEventID, m.TargetAccount); err != nil {
+					return err
+				}
+				continue
+			}
+			target := e.Cfg.AccountByID(m.TargetAccount)
+			if target == nil {
+				continue
+			}
+			dup, err := e.isDuplicateOnTarget(*target, *ev)
+			if err != nil {
+				return err
+			}
+			if dup {
+				continue // 重複実予定が健在 → 抑止継続
+			}
+			if err := e.createFromMapping(ctx, m, *ev); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// parseOriginTag は "<origin_account_id>:<origin_event_id>" を分解する。
+// イベント ID には ":" が含まれうるため最初の ":" で切る
+// (アカウント ID に ":" を含めない前提。model.OriginTagOf と対)。
+func parseOriginTag(tag string) (accountID, eventID string, ok bool) {
+	accountID, eventID, ok = strings.Cut(tag, ":")
+	if !ok || accountID == "" || eventID == "" {
+		return "", "", false
+	}
+	return accountID, eventID, true
+}
+
+// findCachedOriginEvent は origin アカウントの監視カレンダーの events キャッシュから
+// origin イベントを探す(タグにはカレンダー ID が含まれないため全監視カレンダーを見る)。
+// 見つかればイベントとカレンダー ID を、アカウントが設定に無い/キャッシュに無ければ
+// (nil, "", nil) を返す。
+func (e *Engine) findCachedOriginEvent(originAccountID, originEventID string) (*model.NormalizedEvent, string, error) {
+	acct := e.Cfg.AccountByID(originAccountID)
+	if acct == nil {
+		return nil, "", nil
+	}
+	for _, calID := range acct.Calendars {
+		ref := model.CalendarRef{AccountID: originAccountID, CalendarID: calID}
+		ev, err := e.Store.GetEvent(ref, originEventID)
+		if err != nil {
+			return nil, "", err
+		}
+		if ev != nil {
+			return ev, calID, nil
+		}
+	}
+	return nil, "", nil
 }
