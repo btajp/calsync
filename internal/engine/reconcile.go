@@ -44,6 +44,9 @@ func (e *Engine) FullResync(ctx context.Context, ref model.CalendarRef) error {
 	// set-difference: キャッシュにあるがフル結果で生きていない → 消滅扱い。
 	// ブロッカー削除 + mapping 削除 + キャッシュ削除 + suppressed 昇格
 	// (processEvent の削除通知処理と同じ手順。キャッシュ由来の ID なので未知IDガードは不要)
+	// ターゲットの認証失効(TargetAuthError のみのエラー)はそのイベントの後続処理を
+	// スキップして続行する(仕様9.3: 失効ターゲットが origin の同期を止めない)
+	var errs []error
 	cachedIDs, err := e.Store.ListEventIDs(ref)
 	if err != nil {
 		return err
@@ -57,14 +60,23 @@ func (e *Engine) FullResync(ctx context.Context, ref model.CalendarRef) error {
 			return err
 		}
 		if err := e.deleteBlockersForOrigin(ctx, ref, id); err != nil {
-			return err
+			errs = append(errs, err)
+			if onlyTargetAuthErrors(err) {
+				continue // mapping ごと残る。復帰後のリコンサイルで再削除される
+			}
+			return errors.Join(errs...)
 		}
 		if err := e.Store.DeleteEvent(ref, id); err != nil {
-			return err
+			errs = append(errs, err)
+			return errors.Join(errs...)
 		}
 		if cached != nil && cached.ICalUID != "" {
 			if err := e.promoteSuppressed(ctx, ref.AccountID, cached.ICalUID); err != nil {
-				return err
+				errs = append(errs, err)
+				if onlyTargetAuthErrors(err) {
+					continue
+				}
+				return errors.Join(errs...)
 			}
 		}
 	}
@@ -73,17 +85,23 @@ func (e *Engine) FullResync(ctx context.Context, ref model.CalendarRef) error {
 	// pending 行の解決は processEvent / upsertBlockers 側の既存ロジックが行う)
 	for _, ev := range events {
 		if err := e.processEvent(ctx, ref, ev); err != nil {
-			return err
+			errs = append(errs, err)
+			if onlyTargetAuthErrors(err) {
+				continue
+			}
+			return errors.Join(errs...)
 		}
 	}
 
-	// 完走した時だけ新カーソルと新ウィンドウを永続化する(仕様5.1のカーソル規律と同じ)
+	// 完走した時だけ新カーソルと新ウィンドウを永続化する(仕様5.1のカーソル規律と同じ)。
+	// TargetAuthError のみの場合は SyncCalendar と同じ理由でカーソルを前進させる
 	if newCursor != "" {
 		if err := e.Store.SetCursor(ref, newCursor, w); err != nil {
-			return err
+			errs = append(errs, err)
+			return errors.Join(errs...)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // Reconcile はフルリコンサイル(仕様8章)。日次スケジュール(Task 18)と

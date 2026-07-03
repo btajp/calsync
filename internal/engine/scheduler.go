@@ -2,12 +2,10 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"log"
 	"time"
 
 	"github.com/work-a-co/calsync/internal/model"
-	"github.com/work-a-co/calsync/internal/provider"
 )
 
 // nextReconcileAt は now と同じロケーションで、hhmm("15:04" 形式)が指す直近の
@@ -75,17 +73,40 @@ func (e *Engine) tick(ctx context.Context, reauth map[string]bool) {
 			}
 			ref := model.CalendarRef{AccountID: acct.ID, CalendarID: calID}
 			err := e.SyncCalendar(ctx, ref)
-			if err == nil {
+
+			// ターゲットアカウントの認証失効(TargetAuthError)は origin ではなく
+			// 該当ターゲットに帰属させる(仕様9.3)。origin の同期は継続する
+			for _, tae := range collectTargetAuthErrors(err) {
+				if reauth[tae.AccountID] {
+					continue
+				}
+				reauth[tae.AccountID] = true
+				msg := "reauth_required: run `calsync auth add " + tae.AccountID + "`"
+				if target := e.Cfg.AccountByID(tae.AccountID); target != nil {
+					for _, tcalID := range target.Calendars {
+						tref := model.CalendarRef{AccountID: tae.AccountID, CalendarID: tcalID}
+						if serr := e.Store.SetCalendarError(tref, msg); serr != nil {
+							log.Printf("set calendar error %s: %v", tref, serr)
+						}
+					}
+				}
+				log.Printf("account %s: authentication expired (detected while writing blockers); pausing sync until reauth (%s)", tae.AccountID, msg)
+			}
+
+			if err == nil || onlyTargetAuthErrors(err) {
 				// 成功した同期を記録する: 過去の last_error(reauth_required 等)を
 				// クリアし、last_synced_at を更新する(仕様11章の calsync status が
 				// 参照する)。SetCalendarError は "" 指定でエラークリア + 時刻更新の
-				// 両方を担う(store 契約)。
+				// 両方を担う(store 契約)。TargetAuthError のみの場合、origin の
+				// 同期自体は完走している(カーソルも前進済み)ため成功扱いにする
 				if serr := e.Store.SetCalendarError(ref, ""); serr != nil {
 					log.Printf("clear calendar error %s: %v", ref, serr)
 				}
 				continue
 			}
-			if errors.Is(err, provider.ErrAuthExpired) {
+			// origin 自身の失効のみ reauth 扱いにする(errors.Is だと TargetAuthError
+			// 配下の ErrAuthExpired まで origin に誤帰属するため使わない)
+			if originAuthExpired(err) {
 				reauth[acct.ID] = true
 				msg := "reauth_required: run `calsync auth add " + acct.ID + "`"
 				if serr := e.Store.SetCalendarError(ref, msg); serr != nil {

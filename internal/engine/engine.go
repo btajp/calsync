@@ -75,17 +75,28 @@ func (e *Engine) SyncCalendar(ctx context.Context, ref model.CalendarRef) error 
 	if err != nil {
 		return err
 	}
+	var errs []error
 	for _, ev := range events {
 		if err := e.processEvent(ctx, ref, ev); err != nil {
-			return err
+			errs = append(errs, err)
+			if onlyTargetAuthErrors(err) {
+				// ターゲットの認証失効だけなら origin 側の同期は継続・完走させる
+				// (仕様9.3: 失効はターゲットに帰属し、origin の同期は止めない)
+				continue
+			}
+			return errors.Join(errs...)
 		}
 	}
 	if newCursor != "" {
+		// TargetAuthError のみの場合もカーソルは前進させる。処理は冪等で、
+		// 失効ターゲットへの配布は mapping(pending)とリコンサイルが復帰後に
+		// 回収するため、origin の差分を再取得し直す必要はない
 		if err := e.Store.SetCursor(ref, newCursor, w); err != nil {
-			return err
+			errs = append(errs, err)
+			return errors.Join(errs...)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // processEvent は仕様6.1のフローチャート(コントラクトの決定則1〜5)を実装する。
@@ -159,123 +170,141 @@ func (e *Engine) processEvent(ctx context.Context, ref model.CalendarRef, ev mod
 }
 
 // upsertBlockers は origin イベントを全ターゲットへ配布する。
-// mapping なし → 重複抑止判定の上、作成(intent-first + 決定的冪等キー)
-// mapping あり・time_hash 不一致 → UpdateBlocker(patch)
-// mapping あり・一致 → 何もしない
+// 1 ターゲットの認証失効(provider.ErrAuthExpired)は TargetAuthError に包み、
+// そのターゲットだけスキップして他ターゲットへの配布は継続する(仕様9.3)。
+// それ以外のエラーは従来どおり即時中断する。エラーは errors.Join で集約して返す。
 func (e *Engine) upsertBlockers(ctx context.Context, ref model.CalendarRef, ev model.NormalizedEvent) error {
 	originTag := model.OriginTagOf(ref.AccountID, ev.ID)
 	timeHash := model.TimeHash(ev)
+	var errs []error
 	for _, target := range e.Cfg.TargetsOf(ref.AccountID) {
-		m, err := e.Store.GetMapping(ref.AccountID, ref.CalendarID, ev.ID, target.ID)
-		if err != nil {
-			return err
-		}
-		targetCal := model.CalendarRef{AccountID: target.ID, CalendarID: target.BlockerCalendar}
-		p, err := e.providerFor(target.ID)
-		if err != nil {
-			return err
-		}
-		switch {
-		case m == nil || (m.Status == store.StatusPending && m.BlockerEventID == ""):
-			// 新規作成、または pending のまま残った行(クラッシュ跡)の再実行。
-			// 冪等キーは決定的なので再送しても二重作成にならない(仕様6.4)
-			dup, err := e.isDuplicateOnTarget(target, ev)
-			if err != nil {
-				return err
+		if err := e.upsertBlockerOnTarget(ctx, ref, ev, target, originTag, timeHash); err != nil {
+			err = wrapTargetAuth(target.ID, err)
+			errs = append(errs, err)
+			var tae *TargetAuthError
+			if errors.As(err, &tae) {
+				continue // 失効ターゲットのみスキップし、残りのターゲットへ配布を続ける
 			}
-			pm := store.Mapping{
-				OriginAccount:  ref.AccountID,
-				OriginCalendar: ref.CalendarID,
-				OriginEventID:  ev.ID,
-				TargetAccount:  target.ID,
-				TargetCalendar: target.BlockerCalendar,
-				IdempotencyKey: idemKeyFor(target.Provider, originTag, target.ID),
-				TimeHash:       timeHash,
-				Status:         store.StatusSuppressed,
-			}
-			if dup {
-				// 同一会議の実予定がターゲットに存在 → 作成せず suppressed 記録(仕様6.5)
-				if err := e.Store.PutMapping(pm); err != nil {
-					return err
-				}
-				continue
-			}
-			pm.Status = store.StatusPending
-			if err := e.Store.PutMapping(pm); err != nil {
-				return err
-			}
-			b, err := e.blockerFor(ctx, ev, originTag, targetCal, p)
-			if err != nil {
-				return err
-			}
-			eventID, err := p.CreateBlocker(ctx, targetCal, b, pm.IdempotencyKey)
-			if err != nil {
-				return err
-			}
-			pm.BlockerEventID = eventID
-			pm.Status = store.StatusActive
-			if err := e.Store.PutMapping(pm); err != nil {
-				return err
-			}
-		case m.Status == store.StatusSuppressed:
-			// 昇格は Task 9(promoteSuppressed / 再評価)の責務。時刻変更のみ追従する
-			if m.TimeHash != timeHash {
-				m.TimeHash = timeHash
-				if err := e.Store.PutMapping(*m); err != nil {
-					return err
-				}
-			}
-		case m.TimeHash != timeHash:
-			b, err := e.blockerFor(ctx, ev, originTag, targetCal, p)
-			if err != nil {
-				return err
-			}
-			if err := p.UpdateBlocker(ctx, targetCal, m.BlockerEventID, b); err != nil {
-				if errors.Is(err, provider.ErrNotFound) {
-					// ブロッカーが消えている(手動削除等)→ pending 化して再作成する
-					// (createFromMapping が pending → CreateBlocker → active を行う。仕様8章4)
-					if err := e.createFromMapping(ctx, *m, ev); err != nil {
-						return err
-					}
-					continue
-				}
-				return err
-			}
-			m.TimeHash = timeHash
-			if err := e.Store.PutMapping(*m); err != nil {
-				return err
-			}
-		default:
-			// time_hash 一致 → プロバイダ呼び出しなし
+			return errors.Join(errs...)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
+}
+
+// upsertBlockerOnTarget は 1 ターゲット分の配布を行う。
+// mapping なし → 重複抑止判定の上、作成(intent-first + 決定的冪等キー)
+// mapping あり・time_hash 不一致 → UpdateBlocker(patch)。404 は再作成にフォールバック
+// mapping あり・一致 → 何もしない
+func (e *Engine) upsertBlockerOnTarget(ctx context.Context, ref model.CalendarRef, ev model.NormalizedEvent, target config.Account, originTag, timeHash string) error {
+	m, err := e.Store.GetMapping(ref.AccountID, ref.CalendarID, ev.ID, target.ID)
+	if err != nil {
+		return err
+	}
+	targetCal := model.CalendarRef{AccountID: target.ID, CalendarID: target.BlockerCalendar}
+	p, err := e.providerFor(target.ID)
+	if err != nil {
+		return err
+	}
+	switch {
+	case m == nil || (m.Status == store.StatusPending && m.BlockerEventID == ""):
+		// 新規作成、または pending のまま残った行(クラッシュ跡)の再実行。
+		// 冪等キーは決定的なので再送しても二重作成にならない(仕様6.4)
+		dup, err := e.isDuplicateOnTarget(target, ev)
+		if err != nil {
+			return err
+		}
+		pm := store.Mapping{
+			OriginAccount:  ref.AccountID,
+			OriginCalendar: ref.CalendarID,
+			OriginEventID:  ev.ID,
+			TargetAccount:  target.ID,
+			TargetCalendar: target.BlockerCalendar,
+			IdempotencyKey: idemKeyFor(target.Provider, originTag, target.ID),
+			TimeHash:       timeHash,
+			Status:         store.StatusSuppressed,
+		}
+		if dup {
+			// 同一会議の実予定がターゲットに存在 → 作成せず suppressed 記録(仕様6.5)
+			return e.Store.PutMapping(pm)
+		}
+		pm.Status = store.StatusPending
+		if err := e.Store.PutMapping(pm); err != nil {
+			return err
+		}
+		b, err := e.blockerFor(ctx, ev, originTag, targetCal, p)
+		if err != nil {
+			return err
+		}
+		eventID, err := p.CreateBlocker(ctx, targetCal, b, pm.IdempotencyKey)
+		if err != nil {
+			return err
+		}
+		pm.BlockerEventID = eventID
+		pm.Status = store.StatusActive
+		return e.Store.PutMapping(pm)
+	case m.Status == store.StatusSuppressed:
+		// 昇格は Task 9(promoteSuppressed / 再評価)の責務。時刻変更のみ追従する
+		if m.TimeHash != timeHash {
+			m.TimeHash = timeHash
+			return e.Store.PutMapping(*m)
+		}
+		return nil
+	case m.TimeHash != timeHash:
+		b, err := e.blockerFor(ctx, ev, originTag, targetCal, p)
+		if err != nil {
+			return err
+		}
+		if err := p.UpdateBlocker(ctx, targetCal, m.BlockerEventID, b); err != nil {
+			if errors.Is(err, provider.ErrNotFound) {
+				// ブロッカーが消えている(手動削除等)→ pending 化して再作成する
+				// (createFromMapping が pending → CreateBlocker → active を行う。仕様8章4)
+				return e.createFromMapping(ctx, *m, ev)
+			}
+			return err
+		}
+		m.TimeHash = timeHash
+		return e.Store.PutMapping(*m)
+	default:
+		// time_hash 一致 → プロバイダ呼び出しなし
+		return nil
+	}
 }
 
 // deleteBlockersForOrigin は origin イベントに紐づく全ターゲットのブロッカーと
 // mappings を削除する。mapping が無ければ何もしない。
 // suppressed / pending(BlockerEventID 空)の行はプロバイダ呼び出しなしで mapping だけ消す。
+// ターゲットの認証失効は TargetAuthError に包んでそのターゲットだけスキップし
+// (mapping は残す — 復帰後のリコンサイル/再実行で削除される)、他ターゲットの
+// 削除は継続する(仕様9.3)。
 func (e *Engine) deleteBlockersForOrigin(ctx context.Context, ref model.CalendarRef, originEventID string) error {
 	maps, err := e.Store.ListMappingsForOrigin(ref.AccountID, ref.CalendarID, originEventID)
 	if err != nil {
 		return err
 	}
+	var errs []error
 	for _, m := range maps {
 		if m.BlockerEventID != "" {
 			p, err := e.providerFor(m.TargetAccount)
 			if err != nil {
-				return err
+				errs = append(errs, err)
+				return errors.Join(errs...)
 			}
 			targetCal := model.CalendarRef{AccountID: m.TargetAccount, CalendarID: m.TargetCalendar}
 			if err := p.DeleteBlocker(ctx, targetCal, m.BlockerEventID); err != nil {
-				return err
+				if errors.Is(err, provider.ErrAuthExpired) {
+					errs = append(errs, wrapTargetAuth(m.TargetAccount, err))
+					continue
+				}
+				errs = append(errs, err)
+				return errors.Join(errs...)
 			}
 		}
 		if err := e.Store.DeleteMapping(m.OriginAccount, m.OriginCalendar, m.OriginEventID, m.TargetAccount); err != nil {
-			return err
+			errs = append(errs, err)
+			return errors.Join(errs...)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // blockerFor は origin イベントからターゲット用の Blocker を組み立てる。

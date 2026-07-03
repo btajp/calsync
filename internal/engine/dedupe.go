@@ -73,6 +73,8 @@ func (e *Engine) promoteSuppressed(ctx context.Context, targetAccountID, icalUID
 // 使ってブロッカーを作成し、active へ遷移させる(intent-first。仕様6.4)。
 // 同一キーの再実行は既存 ID が返るため二重作成にならない。
 // Task 11 の pending 解決・suppressed 再評価もこのヘルパを使う。
+// ターゲットの認証失効は TargetAuthError に包んで返す(仕様9.3。呼び出し元が
+// 失効アカウントに帰属させられるようにする)。
 func (e *Engine) createFromMapping(ctx context.Context, m store.Mapping, ev model.NormalizedEvent) error {
 	p, err := e.providerFor(m.TargetAccount)
 	if err != nil {
@@ -82,7 +84,7 @@ func (e *Engine) createFromMapping(ctx context.Context, m store.Mapping, ev mode
 	originTag := model.OriginTagOf(m.OriginAccount, m.OriginEventID)
 	b, err := e.blockerFor(ctx, ev, originTag, targetCal, p)
 	if err != nil {
-		return err
+		return wrapTargetAuth(m.TargetAccount, err)
 	}
 	m.TimeHash = model.TimeHash(ev)
 	m.Status = store.StatusPending
@@ -92,7 +94,7 @@ func (e *Engine) createFromMapping(ctx context.Context, m store.Mapping, ev mode
 	}
 	eventID, err := p.CreateBlocker(ctx, targetCal, b, m.IdempotencyKey)
 	if err != nil {
-		return err
+		return wrapTargetAuth(m.TargetAccount, err)
 	}
 	m.BlockerEventID = eventID
 	m.Status = store.StatusActive

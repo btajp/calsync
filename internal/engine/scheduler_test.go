@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -146,6 +148,117 @@ func TestRunSkipsReauthAccountAndContinuesOthers(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, calA)
 	require.Contains(t, calA.LastError, "reauth_required")
+}
+
+// authFailingProvider はブロッカー書き込み系呼び出しを fail フラグが立っている間
+// provider.ErrAuthExpired で失敗させるラッパー(「ターゲットとしての認証失効」を
+// 再現する。Changes は素通しなので、失効検出が origin の同期経由であることを分離できる)。
+type authFailingProvider struct {
+	provider.Provider
+	mu   sync.Mutex
+	fail bool
+}
+
+func (p *authFailingProvider) setFail(v bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.fail = v
+}
+
+func (p *authFailingProvider) failing() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.fail
+}
+
+func (p *authFailingProvider) authErr() error {
+	return fmt.Errorf("status 401: %w", provider.ErrAuthExpired)
+}
+
+func (p *authFailingProvider) CreateBlocker(ctx context.Context, cal model.CalendarRef, b model.Blocker, idemKey string) (string, error) {
+	if p.failing() {
+		return "", p.authErr()
+	}
+	return p.Provider.CreateBlocker(ctx, cal, b, idemKey)
+}
+
+func (p *authFailingProvider) UpdateBlocker(ctx context.Context, cal model.CalendarRef, eventID string, b model.Blocker) error {
+	if p.failing() {
+		return p.authErr()
+	}
+	return p.Provider.UpdateBlocker(ctx, cal, eventID, b)
+}
+
+func (p *authFailingProvider) DeleteBlocker(ctx context.Context, cal model.CalendarRef, eventID string) error {
+	if p.failing() {
+		return p.authErr()
+	}
+	return p.Provider.DeleteBlocker(ctx, cal, eventID)
+}
+
+func (p *authFailingProvider) GetCalendarTimezone(ctx context.Context, cal model.CalendarRef) (string, error) {
+	if p.failing() {
+		return "", p.authErr()
+	}
+	return p.Provider.GetCalendarTimezone(ctx, cal)
+}
+
+// TestTickAttributesTargetAuthExpiryToTargetAccount は仕様9.3の帰属を検証する:
+// origin A の同期中にターゲット B への書き込みが認証失効で失敗しても、
+// (a) 他ターゲット C への配布は継続し、(b) reauth_required は B に帰属して
+// A には帰属せず、(c) A のカーソルは前進し(同期成功扱い)、
+// (d) B の復帰後は Reconcile でバックフィルされる。
+// 修正前は B 由来の ErrAuthExpired が errors.Is で A に誤帰属し、A の同期が
+// 全体停止していた(最終ホールブランチレビュー追補 Issue 3)。
+func TestTickAttributesTargetAuthExpiryToTargetAccount(t *testing.T) {
+	e, f := newTestEngine(t) // a(origin)/ b・c(target)。TZ はキャッシュ済み
+	ctx := context.Background()
+
+	bp := &authFailingProvider{Provider: f, fail: true}
+	e.Providers["b"] = bp
+
+	f.SetFullState(refA, []model.NormalizedEvent{busyEvent("ev1")})
+
+	reauth := map[string]bool{}
+	e.tick(ctx, reauth)
+
+	// (a) 正常ターゲット C にはブロッカーが作成される(B のみスキップ)
+	require.Len(t, f.Blockers(calCv), 1, "healthy target c must still receive the blocker")
+	require.Empty(t, f.Blockers(calBv))
+
+	// (b) reauth_required は B に帰属し、A には帰属しない
+	require.True(t, reauth["b"], "expired target b must enter the reauth set")
+	require.False(t, reauth["a"], "origin a must not be blamed for b's expiry")
+	stB, err := e.Store.GetCalendar(calBv)
+	require.NoError(t, err)
+	require.Contains(t, stB.LastError, "reauth_required")
+	require.Contains(t, stB.LastError, "calsync auth add b")
+	stA, err := e.Store.GetCalendar(refA)
+	require.NoError(t, err)
+	require.Empty(t, stA.LastError, "origin a counts as a successful sync")
+
+	// (c) A のカーソルは前進する(ターゲット失効だけでは同期を失敗扱いにしない)
+	require.Equal(t, "c1", stA.Cursor)
+	require.False(t, stA.LastSyncedAt.IsZero())
+
+	// B への intent は pending として残る(復帰後のバックフィルの足がかり)
+	mB, err := e.Store.GetMapping("a", "primary", "ev1", "b")
+	require.NoError(t, err)
+	require.NotNil(t, mB)
+	require.Equal(t, store.StatusPending, mB.Status)
+
+	// (d) B の復帰後、Reconcile がバックフィルする
+	bp.setFail(false)
+	require.NoError(t, e.Reconcile(ctx))
+
+	blks := f.Blockers(calBv)
+	require.Len(t, blks, 1, "b must be backfilled after recovery")
+	require.Equal(t, "a:ev1", blks[0].OriginTag)
+	mB, err = e.Store.GetMapping("a", "primary", "ev1", "b")
+	require.NoError(t, err)
+	require.NotNil(t, mB)
+	require.Equal(t, store.StatusActive, mB.Status)
+	require.Equal(t, blks[0].EventID, mB.BlockerEventID)
 }
 
 // TestTickPersistsSuccessOnSyncCalendar は成功ティック後に last_error が空で
