@@ -20,6 +20,8 @@ import (
 //   - nextSyncToken は最終ページにのみ返るため、全ページ完走時だけ newCursor を返す。
 //     途中で失敗した場合は newCursor="" のままエラーを返す(呼び出し側は旧カーソルで再実行)
 //   - 410 GONE は provider.ErrCursorInvalid に写像する
+//   - 401 および invalid_grant/interaction_required 系のトークン失効は
+//     provider.ErrAuthExpired に写像する(仕様書9.3)
 //   - showDeleted は指定しない(増分での明示指定は 400。仕様書5.1-4)
 func (c *Client) Changes(ctx context.Context, cal model.CalendarRef, cursor string, window model.Window) ([]model.NormalizedEvent, string, error) {
 	svc, err := c.service(ctx)
@@ -52,7 +54,7 @@ func (c *Client) Changes(ctx context.Context, cal model.CalendarRef, cursor stri
 			if errors.As(err, &gerr) && gerr.Code == http.StatusGone {
 				return nil, "", provider.ErrCursorInvalid
 			}
-			return nil, "", fmt.Errorf("google[%s]: events.list %s: %w", c.accountID, cal, err)
+			return nil, "", fmt.Errorf("google[%s]: events.list %s: %w", c.accountID, cal, normalizeAuthErr(err))
 		}
 		for _, item := range resp.Items {
 			events = append(events, normalizeEvent(item))

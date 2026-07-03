@@ -158,6 +158,19 @@ func TestChangesCursorInvalid(t *testing.T) {
 	require.ErrorIs(t, err, provider.ErrCursorInvalid)
 }
 
+func TestChangesAuthExpired(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error": {"errors": [{"domain": "global", "reason": "authError",
+			"message": "Invalid Credentials"}], "code": 401, "message": "Invalid Credentials"}}`)
+	})
+	c := newTestClient(t, handler)
+
+	_, _, err := c.Changes(context.Background(), testRef, "sync-1", testWindow)
+	require.ErrorIs(t, err, provider.ErrAuthExpired, "401 はトークン失効として ErrAuthExpired に写像される(仕様書9.3)")
+}
+
 func TestChangesRetriesRateLimit(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0

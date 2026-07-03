@@ -15,6 +15,8 @@ import (
 	calendar "google.golang.org/api/calendar/v3"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
+
+	"github.com/work-a-co/calsync/internal/provider"
 )
 
 // maxRetries は 403/429(usageLimits 系)に対する再試行回数の上限(仕様書10章)。
@@ -82,6 +84,24 @@ func (c *Client) doWithRetry(ctx context.Context, fn func() error) error {
 		case <-time.After(delay):
 		}
 	}
+}
+
+// normalizeAuthErr は Google 由来の認証失効エラーを provider.ErrAuthExpired に
+// 正規化する(仕様書9.3)。判定対象:
+//   - googleapi.Error で Code==401(Google 固有の判定なのでここで行う)
+//   - oauth2.RetrieveError で invalid_grant / interaction_required
+//     (TokenSource の失敗は http.Client 経由で *url.Error に包まれて届く。
+//     この判定自体は provider.NormalizeAuthErr に委譲し、autherr.go に
+//     googleapi 依存を持ち込まないようにする)
+//
+// 該当しない場合は err をそのまま返す。Changes 等、doWithRetry の呼び出し元が
+// 共通で使う。
+func normalizeAuthErr(err error) error {
+	var gerr *googleapi.Error
+	if errors.As(err, &gerr) && gerr.Code == http.StatusUnauthorized {
+		return fmt.Errorf("%w: %w", provider.ErrAuthExpired, err)
+	}
+	return provider.NormalizeAuthErr(err)
 }
 
 // isRateLimited は Google のクォータ系エラー(再試行対象)かを判定する。
