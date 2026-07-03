@@ -645,3 +645,106 @@ func TestReconcile_PendingStaysPendingWhenCreateBlockerFails(t *testing.T) {
 	require.NotEmpty(t, m2.BlockerEventID)
 	require.Len(t, f.Blockers(calBv), 1)
 }
+
+// TestReconcile_RebuildsLoopPreventionBeforeDistribution は DB 全損からの再構築時の
+// ループ遮断を検証する。実障害(2026-07-04): DB 再構築で mappings が空の状態のまま配布が
+// 先に走り、Graph delta がタグを返せない制約と重なって、Microsoft カレンダー上の受領
+// ブロッカー(タグ不可視の busy イベントとして届く)が実予定と誤認され全カレンダーへ
+// 再ミラーされた(複製957件)。フェーズ0(タグからの mappings 先行再構築)がこれを防ぐ。
+func TestReconcile_RebuildsLoopPreventionBeforeDistribution(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+
+	// 実 origin: a の実予定 ev1(過去の稼働で b へ配布済みという状況を再現)
+	f.SetFullState(refA, []model.NormalizedEvent{busyEvent("ev1")})
+
+	// b 上に既存ブロッカー blk1(タグは ListBlockers でのみ見える = Graph の実挙動)
+	f.SeedBlocker(calBv, model.BlockerRecord{
+		EventID:   "blk1",
+		OriginTag: model.OriginTagOf("a", "ev1"),
+		TimeHash:  model.TimeHash(busyEvent("ev1")),
+	})
+	// b の差分/フル同期はそのブロッカーを「タグなしの busy イベント」として返す
+	// (Graph delta は拡張プロパティを返せない公式制約の再現)
+	tagless := busyEvent("blk1")
+	tagless.ICalUID = "blk1@fake"
+	f.SetFullState(calBv, []model.NormalizedEvent{tagless})
+
+	// 既存汚染の再現: 過去の事故で blk1 が b のイベントキャッシュに実予定として
+	// 誤キャッシュされ、b:blk1 を origin とする複製が c に配布済み(mapping+実体)
+	require.NoError(t, e.Store.UpsertEvent(calBv, tagless))
+	f.SeedBlocker(calCv, model.BlockerRecord{
+		EventID:   "dupOnC",
+		OriginTag: model.OriginTagOf("b", "blk1"),
+		TimeHash:  model.TimeHash(tagless),
+	})
+	require.NoError(t, e.Store.PutMapping(store.Mapping{
+		OriginAccount: "b", OriginCalendar: "primary", OriginEventID: "blk1",
+		TargetAccount: "c", TargetCalendar: "primary",
+		BlockerEventID: "dupOnC", IdempotencyKey: "k-dup", TimeHash: model.TimeHash(tagless),
+		Status: store.StatusActive,
+	}))
+
+	require.NoError(t, e.Reconcile(ctx))
+
+	// (0) 既存汚染が完全に除去されている: 誤キャッシュ行・複製 mapping・複製実体
+	ids, err := e.Store.ListEventIDs(calBv)
+	require.NoError(t, err)
+	require.NotContains(t, ids, "blk1", "自作ブロッカーの誤キャッシュ行は set-difference で掃除される")
+	for _, b := range f.Blockers(calCv) {
+		require.NotEqual(t, "dupOnC", b.EventID, "既存の複製ブロッカーは物理削除される")
+	}
+	dm, err := e.Store.GetMapping("b", "primary", "blk1", "c")
+	require.NoError(t, err)
+	require.Nil(t, dm, "複製 mapping は削除される")
+
+	// (1) b 上のブロッカーが実予定と誤認されて配布されていないこと(ループ遮断)
+	bOrigin, err := e.Store.ListMappingsWhereOriginAccount("b")
+	require.NoError(t, err)
+	require.Empty(t, bOrigin, "b 上の受領ブロッカーを origin として再ミラーしてはならない")
+	require.Empty(t, f.Blockers(refA), "origin a のカレンダーにブロッカーが逆流してはならない")
+	require.Len(t, f.Blockers(calCv), 1, "c には a:ev1 由来の1件だけが立つ(blk1 の複製が立ってはならない)")
+
+	// (2) 既存ブロッカー blk1 はタグから mappings に再収容されている(重複作成なし)
+	require.Len(t, f.Blockers(calBv), 1, "b のブロッカーは既存 blk1 の1件のまま")
+	m, err := e.Store.GetMapping("a", "primary", "ev1", "b")
+	require.NoError(t, err)
+	require.NotNil(t, m)
+	require.Equal(t, "blk1", m.BlockerEventID)
+	require.Equal(t, store.StatusActive, m.Status)
+}
+
+// TestReconcile_CleansActiveMappingsWithDeadOrigins は「origin がイベントキャッシュに
+// 存在しない active mapping」の自動掃除を検証する。汚染された mapping(実在しない origin を
+// 指す)が残ると restoreMissingBlockers が複製を再作成し続けるため、フル同期が成功した
+// カレンダーの origin についてはキャッシュ非存在 = origin 消滅として blocker ごと掃除する。
+func TestReconcile_CleansActiveMappingsWithDeadOrigins(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+
+	// a のフル同期結果に evGone は存在しない(実予定ではない)
+	f.SetFullState(refA, []model.NormalizedEvent{busyEvent("ev1")})
+
+	// 汚染: 実在しない origin a:evGone を指す active mapping と、その blocker が b 上にある
+	f.SeedBlocker(calBv, model.BlockerRecord{
+		EventID:   "blkGone",
+		OriginTag: model.OriginTagOf("a", "evGone"),
+		TimeHash:  "deadbeef00000000",
+	})
+	require.NoError(t, e.Store.PutMapping(store.Mapping{
+		OriginAccount: "a", OriginCalendar: "primary", OriginEventID: "evGone",
+		TargetAccount: "b", TargetCalendar: "primary",
+		BlockerEventID: "blkGone", IdempotencyKey: "k-evGone", TimeHash: "deadbeef00000000",
+		Status: store.StatusActive,
+	}))
+
+	require.NoError(t, e.Reconcile(ctx))
+
+	// 汚染ブロッカーは物理削除され、mapping も消え、復元もされない
+	for _, b := range f.Blockers(calBv) {
+		require.NotEqual(t, "blkGone", b.EventID, "origin 消滅ブロッカーは掃除される")
+	}
+	m, err := e.Store.GetMapping("a", "primary", "evGone", "b")
+	require.NoError(t, err)
+	require.Nil(t, m, "origin 消滅の mapping は削除される")
+}

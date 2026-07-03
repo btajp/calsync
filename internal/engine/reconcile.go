@@ -38,9 +38,24 @@ func (e *Engine) FullResync(ctx context.Context, ref model.CalendarRef) error {
 	// ウィンドウ外・非 busy 化・削除済みはここに入らず、下の消滅処理で掃除される。
 	alive := make(map[string]bool, len(events))
 	for _, ev := range events {
-		if !ev.Deleted && ShouldBlock(ev) && InWindow(w, ev) {
-			alive[ev.ID] = true
+		if ev.Deleted || !ShouldBlock(ev) || !InWindow(w, ev) {
+			continue
 		}
+		// ループ遮断を alive にも適用する: 自作ブロッカー(タグ or mappings 一次判定)は
+		// origin ではないため「生きているキャッシュ対象」に数えない。ここで除外しないと、
+		// 事故等で誤キャッシュされたブロッカー行と、それを origin とする汚染 mappings が
+		// set-difference を永遠に免れて残存する(実障害 2026-07-04 の残存経路)。
+		if ev.OriginTag != "" {
+			continue
+		}
+		known, kerr := e.Store.IsBlocker(ref.AccountID, ev.ID)
+		if kerr != nil {
+			return kerr
+		}
+		if known {
+			continue
+		}
+		alive[ev.ID] = true
 	}
 
 	// set-difference: キャッシュにあるがフル結果で生きていない → 消滅扱い。
@@ -118,13 +133,28 @@ func (e *Engine) FullResync(ctx context.Context, ref model.CalendarRef) error {
 // 1 カレンダーの障害で全体を止めず、エラーは集約して返す(仕様10章)。
 func (e *Engine) Reconcile(ctx context.Context) error {
 	var errs []error
+	// フェーズ0: タグからの mappings 先行再構築(削除判断は一切しない)。
+	// DB 全損直後は mappings が空で、Graph delta はタグを返せないため、これを
+	// 配布(FullResync)より先に行わないと Microsoft カレンダー上の受領ブロッカーが
+	// 実予定と誤認され全カレンダーへ再ミラーされる(実障害 2026-07-04: 複製957件)。
+	if err := e.rebuildMappingsFromTags(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("rebuild mappings from tags: %w", err))
+	}
+	healthy := make(map[model.CalendarRef]bool)
 	for _, acct := range e.Cfg.Accounts {
 		for _, calID := range acct.Calendars {
 			ref := model.CalendarRef{AccountID: acct.ID, CalendarID: calID}
 			if err := e.FullResync(ctx, ref); err != nil {
 				errs = append(errs, fmt.Errorf("full resync %s: %w", ref, err))
+			} else {
+				healthy[ref] = true
 			}
 		}
+	}
+	// origin 消滅 mapping の掃除は restoreMissingBlockers より前に行う
+	// (残すと restore が消滅 origin のブロッカーを再作成し続ける)。
+	if err := e.cleanStaleMappings(ctx, healthy); err != nil {
+		errs = append(errs, fmt.Errorf("clean stale mappings: %w", err))
 	}
 	if err := e.resolvePending(ctx); err != nil {
 		errs = append(errs, fmt.Errorf("resolve pending: %w", err))
@@ -169,6 +199,114 @@ func (e *Engine) resolvePending(ctx context.Context) error {
 		}
 		if err := e.createFromMapping(ctx, m, *ev); err != nil {
 			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// rebuildMappingsFromTags は全カレンダーの calsync タグ付きブロッカーを列挙し、
+// mappings に存在しないものを active として先行再収容する(フェーズ0)。
+// ここでは削除判断を一切しない: origin の生死はこの時点ではイベントキャッシュが
+// 空・古い可能性があり判定できないため、掃除は FullResync 後のフェーズに委ねる。
+func (e *Engine) rebuildMappingsFromTags(ctx context.Context) error {
+	w := e.currentWindow()
+	var errs []error
+	for _, acct := range e.Cfg.Accounts {
+		ref := model.CalendarRef{AccountID: acct.ID, CalendarID: acct.BlockerCalendar}
+		p, err := e.providerFor(acct.ID)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("account %s: %w", acct.ID, err))
+			continue
+		}
+		recs, err := p.ListBlockers(ctx, ref, w)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("list blockers %s: %w", ref, err))
+			continue
+		}
+		for _, rec := range recs {
+			known, err := e.Store.IsBlocker(acct.ID, rec.EventID)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("is blocker %s on %s: %w", rec.EventID, ref, err))
+				continue
+			}
+			if known {
+				continue
+			}
+			originAcct, originEventID, ok := parseOriginTag(rec.OriginTag)
+			if !ok {
+				continue // calsync 製と断定できないため触らない
+			}
+			// origin のカレンダーはタグに含まれない。監視対象の先頭(v1 は実質 primary)
+			// を採用する。実際の配置は後続フェーズの突合で収斂する。
+			originCal := "primary"
+			if oa := e.Cfg.AccountByID(originAcct); oa != nil && len(oa.Calendars) > 0 {
+				originCal = oa.Calendars[0]
+			}
+			existing, err := e.Store.GetMapping(originAcct, originCal, originEventID, acct.ID)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("get mapping for %s on %s: %w", rec.EventID, ref, err))
+				continue
+			}
+			if existing != nil {
+				continue // 同一 origin/target 対が既に存在(pending/suppressed 含め尊重)
+			}
+			m := store.Mapping{
+				OriginAccount:  originAcct,
+				OriginCalendar: originCal,
+				OriginEventID:  originEventID,
+				TargetAccount:  acct.ID,
+				TargetCalendar: acct.BlockerCalendar,
+				BlockerEventID: rec.EventID,
+				IdempotencyKey: idemKeyFor(acct.Provider, rec.OriginTag, acct.ID),
+				TimeHash:       rec.TimeHash,
+				Status:         store.StatusActive,
+			}
+			if err := e.Store.PutMapping(m); err != nil {
+				errs = append(errs, fmt.Errorf("adopt %s on %s: %w", rec.EventID, ref, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// cleanStaleMappings は「フル同期が成功したカレンダーの origin なのに、イベント
+// キャッシュに origin が存在しない active mapping」を blocker ごと掃除する。
+// フル同期成功後のキャッシュはそのカレンダーの正であり、そこに無い origin は
+// 消滅している(または実予定ではない = 汚染 mapping)。失敗したカレンダーの
+// origin には触らない(キャッシュが古い可能性があるため安全側)。
+func (e *Engine) cleanStaleMappings(ctx context.Context, healthy map[model.CalendarRef]bool) error {
+	var errs []error
+	done := make(map[string]bool) // origin 単位の重複処理防止
+	for _, acct := range e.Cfg.Accounts {
+		maps, err := e.Store.ListMappingsWhereOriginAccount(acct.ID)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("list mappings for %s: %w", acct.ID, err))
+			continue
+		}
+		for _, m := range maps {
+			if m.Status != store.StatusActive {
+				continue
+			}
+			oref := model.CalendarRef{AccountID: m.OriginAccount, CalendarID: m.OriginCalendar}
+			if !healthy[oref] {
+				continue
+			}
+			key := oref.String() + "|" + m.OriginEventID
+			if done[key] {
+				continue
+			}
+			ev, err := e.Store.GetEvent(oref, m.OriginEventID)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("get event %s: %w", key, err))
+				continue
+			}
+			if ev != nil {
+				continue // origin 生存
+			}
+			done[key] = true
+			if err := e.deleteBlockersForOrigin(ctx, oref, m.OriginEventID); err != nil {
+				errs = append(errs, fmt.Errorf("clean stale origin %s: %w", key, err))
+			}
 		}
 	}
 	return errors.Join(errs...)
