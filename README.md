@@ -39,7 +39,13 @@ flowchart LR
    - 個人利用(累計 100 ユーザー未満)なら Google の検証審査は不要です。認可時に「Google hasn't verified this app」警告が出ますが、「Advanced」→「Go to ...(unsafe)」でクリックスルーできます
 3. 認証情報 → OAuth クライアント ID を **「Desktop app」タイプ**で作成し、**作成直後に JSON をダウンロードして保存してください**(2025 年以降、client secret は作成時にしか表示されません)。JSON をデータディレクトリに置き、`providers.google.credentials_file` にパスを指定します
 4. Desktop app の client_secret について: Google 公式ドキュメントは「In this context, the client secret is obviously not treated as a secret.(この文脈では client secret は秘密として扱われない)」と明記しています。JSON がデータディレクトリにあること自体は設計上の問題ではありませんが、他人のアクセスできる場所には置かないでください
-5. **6 ヶ月間トークン交換のない OAuth クライアントは Google が自動削除します**。長期停止後に `invalid_client` エラーが出た場合は、クライアントを再作成して JSON を差し替えてください
+5. **セットアップ後の定期的なメンテナンス作業は不要です**。Google には「6 ヶ月」系の制限が 2 つあります(トークン交換が 6 ヶ月ない OAuth クライアントの自動削除・6 ヶ月未使用の refresh token の失効)が、どちらも「その間まったく使われなかった場合」にのみ発動します。calsync は毎分のポーリングでトークンを更新し続けるため、**稼働している限りこの条件には該当しません**。注意が必要なのは **calsync を 6 ヶ月以上停止して放置した場合だけ**です。その場合は `invalid_client` エラー(クライアント自動削除。削除から 30 日以内なら GCP コンソールから復元可能)やトークン失効が起きるので、クライアントの復元または再作成 + JSON 差し替え + `calsync auth add <id>` の再実行が必要です
+
+### Google Workspace 組織で GCP が使えない場合
+
+- **OAuth クライアントを作る GCP プロジェクトは、同期対象のアカウントと同じである必要はありません**。calsync は `providers.google.credentials_file` の 1 クライアントを全 Google アカウントで共用するため、個人の Google アカウントで GCP プロジェクトとクライアントを作成し(External + In production)、職場アカウントはそのクライアントに対して認証する構成が可能です。職場側で GCP サービスが無効化されていても、この構成なら問題になりません
+- ただし本当の関門は組織の**第三者アプリのアクセス制御**(管理コンソール → セキュリティ → API の制御)です。管理者が未確認アプリをブロックしていたり Google Calendar API を「制限付き」に設定している場合、職場アカウントの認可そのものがブロックされ、未検証アプリ警告のクリックスルーもできません。この場合は管理者にこのアプリ(client ID)を信頼済みとして許可してもらう必要があります
+- 組織で GCP が使えるなら、その組織のプロジェクトで **Internal** として作るのが最も摩擦の少ない構成です(未検証警告なし・検証審査不要。ただし組織の API 制御設定によっては Internal アプリでも別途信頼登録が必要な場合があります)
 
 ## セットアップ 2: Microsoft(Entra ID)
 
@@ -190,7 +196,8 @@ calsync が作成するブロッカー予定には、ループ防止・自己修
 | 症状 | 原因と対処 |
 | --- | --- |
 | Google: 7 日ごとに再認証を求められる | OAuth 同意画面が Testing のまま。**In production に変更**(上記セットアップ 1-2) |
-| Google: `invalid_client` | 6 ヶ月間未使用でクライアントが自動削除された。クライアント再作成 + JSON 差し替え |
+| Google: `invalid_client` | calsync を 6 ヶ月以上停止していたためクライアントが自動削除された(稼働中は発生しない)。30 日以内なら GCP コンソールで復元、超過ならクライアント再作成 + JSON 差し替え |
+| Google: 職場アカウントの認可が組織ポリシーでブロックされる | GWS の第三者アプリアクセス制御。管理者に client ID の許可を依頼(セットアップ 1 の「GWS 組織で GCP が使えない場合」参照) |
 | Microsoft: `AADSTS7000218` | 「Allow public client flows」が No のまま。Yes に変更(セットアップ 2-4) |
 | Microsoft: `AADSTS65001` / `AADSTS90094` | 組織でユーザー同意が無効。管理者に「Grant admin consent」を依頼(セットアップ 2-5) |
 | `data directory is locked by another calsync process` | 二重起動、または `sync` / `reconcile` / `accounts remove` をデーモン実行中に実行した。デーモンを止めてから実行(`status` / `doctor` は稼働中でも実行可) |
