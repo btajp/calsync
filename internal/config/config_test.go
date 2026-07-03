@@ -150,6 +150,26 @@ accounts:
 			wantErr: `id must not contain ":"`,
 		},
 		{
+			// busy_show_as は Graph の freeBusyStatus 列挙値のみ許容する
+			// (タイポを黙って「busy 扱いされない値」として吸収しない)
+			name:    "invalid busy_show_as value is rejected",
+			yaml:    "busy_show_as: [busy, ooof]\n" + minimalYAML,
+			wantErr: "invalid busy_show_as",
+		},
+		{
+			// 大文字小文字は Graph の camelCase 表記に厳密一致(WorkingElsewhere は不可)
+			name:    "busy_show_as is case-sensitive",
+			yaml:    "busy_show_as: [Busy]\n" + minimalYAML,
+			wantErr: "invalid busy_show_as",
+		},
+		{
+			name: "all valid busy_show_as values are accepted",
+			yaml: "busy_show_as: [free, tentative, busy, oof, workingElsewhere, unknown]\n" + minimalYAML,
+			check: func(t *testing.T, c *Config) {
+				require.Equal(t, []string{"free", "tentative", "busy", "oof", "workingElsewhere", "unknown"}, c.BusyShowAs)
+			},
+		},
+		{
 			name: "unsupported provider is rejected",
 			yaml: `
 accounts:

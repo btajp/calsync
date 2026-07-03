@@ -38,6 +38,12 @@ var syncCmd = &cobra.Command{
 					if firstErr == nil {
 						firstErr = err
 					}
+					continue
+				}
+				// 成功時は last_error クリア + last_synced_at 更新(scheduler.tick と
+				// 同じ status 追随。`calsync status` が sync --once の結果も反映する)
+				if serr := eng.Store.SetCalendarError(ref, ""); serr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "record sync status %s: %v\n", ref, serr)
 				}
 			}
 		}

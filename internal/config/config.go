@@ -72,6 +72,17 @@ type rawAccount struct {
 
 var syncWindowRe = regexp.MustCompile(`^([0-9]+)(mo|d)$`)
 
+// validShowAs は Graph の freeBusyStatus が取りうる値(busy_show_as の許容値)。
+// 大文字小文字は Graph の応答表記(camelCase)に合わせて厳密比較する。
+var validShowAs = map[string]bool{
+	"free":             true,
+	"tentative":        true,
+	"busy":             true,
+	"oof":              true,
+	"workingElsewhere": true,
+	"unknown":          true,
+}
+
 // Load は YAML 設定を読み込み、検証とデフォルト補完を行う。
 func Load(path string) (*Config, error) {
 	f, err := os.Open(path)
@@ -135,6 +146,11 @@ func Load(path string) (*Config, error) {
 		cfg.DedupeSameMeeting = *raw.DedupeSameMeeting
 	}
 	if len(raw.BusyShowAs) > 0 {
+		for _, v := range raw.BusyShowAs {
+			if !validShowAs[v] {
+				return nil, fmt.Errorf("config: invalid busy_show_as value %q (want one of free, tentative, busy, oof, workingElsewhere, unknown)", v)
+			}
+		}
 		cfg.BusyShowAs = raw.BusyShowAs
 	}
 
