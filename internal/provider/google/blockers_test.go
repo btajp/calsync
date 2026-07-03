@@ -146,6 +146,74 @@ func TestCreateBlockerConflictAdoptsExisting(t *testing.T) {
 	require.Equal(t, "/calendars/primary/events/"+idem, reqs[1].Path)
 }
 
+// 409 収容が cancelled(削除済み)イベントの ID を無条件に返すと、busy→free→busy の
+// 削除→再作成シナリオでカレンダーに見えないイベントを active mapping に収容してしまい、
+// ブロッカーが二度と出現しなくなる(最終ホールブランチレビュー所見1)。
+// events.get が status=cancelled を返した場合は events.update で本来の insert ボディ
+// (ID を除く)を送って蘇生し、その ID を返さねばならない。
+func TestCreateBlockerConflictResurrectsCancelledEvent(t *testing.T) {
+	b := model.Blocker{
+		Title:     "予定あり",
+		StartUTC:  time.Date(2026, 7, 10, 1, 0, 0, 0, time.UTC),
+		EndUTC:    time.Date(2026, 7, 10, 2, 0, 0, 0, time.UTC),
+		OriginTag: model.OriginTagOf("work", "ev-origin-1"),
+	}
+	idem := model.GoogleBlockerID(b.OriginTag, "test-account")
+
+	rec := &recorder{}
+	handler := rec.wrap(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodPost:
+			w.WriteHeader(http.StatusConflict)
+			fmt.Fprint(w, `{"error": {"errors": [{"domain": "global", "reason": "duplicate",
+				"message": "The requested identifier already exists."}],
+				"code": 409, "message": "The requested identifier already exists."}}`)
+		case http.MethodGet:
+			fmt.Fprintf(w, `{"id": %q, "status": "cancelled"}`, idem)
+		case http.MethodPut:
+			fmt.Fprintf(w, `{"id": %q, "status": "confirmed"}`, idem)
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	})
+	c := newTestClient(t, handler)
+
+	eventID, err := c.CreateBlocker(context.Background(), testRef, b, idem)
+	require.NoError(t, err, "cancelled イベントの蘇生はエラーにしない")
+	require.Equal(t, idem, eventID)
+
+	reqs := rec.all()
+	require.Len(t, reqs, 3)
+	require.Equal(t, http.MethodPost, reqs[0].Method)
+	require.Equal(t, http.MethodGet, reqs[1].Method, "409 後は events.get で状態確認する")
+	require.Equal(t, http.MethodPut, reqs[2].Method, "cancelled なら events.update で蘇生する")
+	require.Equal(t, "/calendars/primary/events/"+idem, reqs[2].Path)
+
+	m := decodeBody(t, reqs[2].Body)
+	require.Equal(t, "予定あり", m["summary"])
+	require.Equal(t, "opaque", m["transparency"])
+	require.Equal(t, "private", m["visibility"])
+
+	rem, ok := m["reminders"].(map[string]any)
+	require.True(t, ok, "蘇生ボディにも reminders を含める")
+	require.Equal(t, false, rem["useDefault"])
+
+	ext, ok := m["extendedProperties"].(map[string]any)
+	require.True(t, ok, "蘇生ボディにも extendedProperties を含める")
+	priv, ok := ext["private"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "v1", priv["calsync"])
+	require.Equal(t, "work:ev-origin-1", priv["calsync-origin"])
+
+	start, ok := m["start"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "2026-07-10T01:00:00Z", start["dateTime"])
+	end, ok := m["end"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "2026-07-10T02:00:00Z", end["dateTime"])
+}
+
 func TestUpdateBlockerPatchesTimesOnly(t *testing.T) {
 	rec := &recorder{}
 	handler := rec.wrap(func(w http.ResponseWriter, r *http.Request) {

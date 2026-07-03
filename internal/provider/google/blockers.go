@@ -39,16 +39,12 @@ func blockerEnd(b model.Blocker) *calendar.EventDateTime {
 	}
 }
 
-// CreateBlocker は idemKey をクライアント生成イベント ID として events.insert する
-// (冪等作成。仕様書6.4)。409(ID 衝突)は「同一冪等キーで作成済み」を意味するため、
-// events.get で実在確認してその ID を返し、エラーにしない(収容)。
-func (c *Client) CreateBlocker(ctx context.Context, cal model.CalendarRef, b model.Blocker, idemKey string) (string, error) {
-	svc, err := c.service(ctx)
-	if err != nil {
-		return "", err
-	}
-	body := &calendar.Event{
-		Id:           idemKey,
+// blockerEventBody はブロッカーの本体(summary / transparency / visibility /
+// reminders / extendedProperties / start / end)を組み立てる。events.insert
+// (呼び出し元が Id を追加設定する)と、409 収容が cancelled イベントを蘇生させる
+// events.update の両方で共用する(仕様書6.4。最終ホールブランチレビュー修正1)。
+func blockerEventBody(b model.Blocker) *calendar.Event {
+	return &calendar.Event{
 		Summary:      b.Title,
 		Transparency: "opaque",
 		Visibility:   "private",
@@ -66,6 +62,25 @@ func (c *Client) CreateBlocker(ctx context.Context, cal model.CalendarRef, b mod
 			},
 		},
 	}
+}
+
+// CreateBlocker は idemKey をクライアント生成イベント ID として events.insert する
+// (冪等作成。仕様書6.4)。409(ID 衝突)は「同一冪等キーで作成済み」を意味するため、
+// events.get で実在確認する。
+//
+// ただし Google は削除済みイベントを cancelled 状態のまま保持し、同一 ID の
+// 再 insert も 409 を返す。cancelled の ID をそのまま返すと、そのブロッカーは
+// カレンダー上に見えないにもかかわらず active mapping に収容されてしまい、
+// busy→free→busy のような削除→再作成シナリオでブロッカーが二度と出現しなくなる
+// (最終ホールブランチレビュー所見1)。そのため cancelled の場合は events.update で
+// 本来 insert するはずだったボディを送って蘇生し、その ID を返す。
+func (c *Client) CreateBlocker(ctx context.Context, cal model.CalendarRef, b model.Blocker, idemKey string) (string, error) {
+	svc, err := c.service(ctx)
+	if err != nil {
+		return "", err
+	}
+	body := blockerEventBody(b)
+	body.Id = idemKey
 	insert := svc.Events.Insert(cal.CalendarID, body).Context(ctx)
 	var created *calendar.Event
 	err = c.doWithRetry(ctx, func() error {
@@ -87,7 +102,19 @@ func (c *Client) CreateBlocker(ctx context.Context, cal model.CalendarRef, b mod
 		}); err != nil {
 			return "", fmt.Errorf("google[%s]: confirm existing blocker %s: %w", c.accountID, idemKey, normalizeAuthErr(err))
 		}
-		return existing.Id, nil
+		if existing.Status != "cancelled" {
+			return existing.Id, nil
+		}
+		update := svc.Events.Update(cal.CalendarID, idemKey, blockerEventBody(b)).Context(ctx)
+		var revived *calendar.Event
+		if err := c.doWithRetry(ctx, func() error {
+			var e error
+			revived, e = update.Do()
+			return e
+		}); err != nil {
+			return "", fmt.Errorf("google[%s]: resurrect cancelled blocker %s: %w", c.accountID, idemKey, normalizeAuthErr(err))
+		}
+		return revived.Id, nil
 	}
 	return "", fmt.Errorf("google[%s]: events.insert %s: %w", c.accountID, cal, normalizeAuthErr(err))
 }
