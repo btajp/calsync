@@ -208,6 +208,40 @@ func TestDeleteBlocker(t *testing.T) {
 	require.NoError(t, f.DeleteBlocker(ctx, calB, "never-existed"))
 }
 
+func TestDeleteBlocker_ReleasesIdemKey(t *testing.T) {
+	f := fake.New()
+	ctx := context.Background()
+	start := time.Date(2026, 7, 10, 1, 0, 0, 0, time.UTC)
+
+	// Create first blocker with idemKey "k1"
+	id1, err := f.CreateBlocker(ctx, calB, blocker("a:e1", start), "k1")
+	require.NoError(t, err)
+	require.NotEmpty(t, id1)
+
+	// Delete the blocker
+	require.NoError(t, f.DeleteBlocker(ctx, calB, id1))
+	require.Empty(t, f.Blockers(calB))
+
+	// Create a new blocker with the same idemKey but different content
+	id2, err := f.CreateBlocker(ctx, calB, blocker("a:e2", start.Add(time.Hour)), "k1")
+	require.NoError(t, err)
+
+	// Should get a new ID (not the old deleted one)
+	require.NotEqual(t, id1, id2)
+
+	// Should have exactly one blocker with the new content
+	recs := f.Blockers(calB)
+	require.Len(t, recs, 1)
+	require.Equal(t, id2, recs[0].EventID)
+	require.Equal(t, "a:e2", recs[0].OriginTag)
+
+	// StoredBlocker should return the new content
+	body, ok := f.StoredBlocker(calB, id2)
+	require.True(t, ok)
+	require.Equal(t, "a:e2", body.OriginTag)
+	require.Equal(t, start.Add(time.Hour), body.StartUTC)
+}
+
 func TestSeedBlockerAndListBlockers(t *testing.T) {
 	f := fake.New()
 	ctx := context.Background()

@@ -187,7 +187,16 @@ func (f *Fake) UpdateBlocker(ctx context.Context, cal model.CalendarRef, eventID
 func (f *Fake) DeleteBlocker(ctx context.Context, cal model.CalendarRef, eventID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	delete(f.state(cal).blockers, eventID) // 未存在(404 相当)でも成功扱い
+	st := f.state(cal)
+	delete(st.blockers, eventID) // 未存在(404 相当)でも成功扱い
+
+	// byIdemKey から該当するエントリを削除(削除後の同キー再作成は新規扱い)
+	for key, id := range st.byIdemKey {
+		if id == eventID {
+			delete(st.byIdemKey, key)
+			break
+		}
+	}
 	return nil
 }
 
