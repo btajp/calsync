@@ -92,12 +92,27 @@ func runLoopbackFlow(ctx context.Context, cfg *oauth2.Config, port int, out io.W
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintln(w, "calsync: authentication complete. You can close this window.")
+		// レスポンスを TCP へフラッシュしてから結果を配送する。deliver 後は
+		// 呼び出し元がすぐ関数を抜けて Shutdown が走り得るため、先にフラッシュしておかないと
+		// ブラウザ側が書き切っていないレスポンスで接続リセットを見ることがある。
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
 		deliver(flowResult{tok: tok})
 	})
 
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go srv.Serve(ln) //nolint:errcheck // Close 由来の ErrServerClosed は無視してよい
-	defer srv.Close()
+	// Close ではなく Shutdown を使う: Close は即座に接続を切るため、ハンドラが
+	// レスポンスを書き終える前に相手へ EOF/接続リセットが返ることがある。
+	// Shutdown はアクティブなハンドラの完了を待ってから閉じるため、
+	// クライアントは常にレスポンスを読み切れる。ctx キャンセル時に無期限で
+	// 待たないよう、Shutdown 自体には短いタイムアウト付きの ctx を渡す。
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
 
 	fmt.Fprintf(out, "Open this URL in your browser to authorize calsync:\n\n  %s\n\n", authURL)
 	if openURL != nil {
