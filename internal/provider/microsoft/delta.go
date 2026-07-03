@@ -129,6 +129,7 @@ func normalizeDeltaEvent(de deltaEvent, busyShowAs map[string]bool) (model.Norma
 	}
 	if de.IsAllDay {
 		ev.IsAllDay = true
+		// NOTE: 終日イベントの start/end が実 API で UTC 変換され日付がズレないこと要実測(spec 15章)
 		s, err := datePart(de.Start.DateTime)
 		if err != nil {
 			return model.NormalizedEvent{}, err
