@@ -1,0 +1,94 @@
+package model
+
+import (
+	"crypto/sha256"
+	"encoding/base32"
+	"encoding/hex"
+	"fmt"
+	"time"
+)
+
+type Window struct {
+	Start time.Time // 含む(end > Start のイベントが対象)
+	End   time.Time // 含まない(start < End のイベントが対象)
+}
+
+type CalendarRef struct {
+	AccountID  string
+	CalendarID string // Google: "primary" 等 / Microsoft: 常に "primary"(v1)
+}
+
+type NormalizedEvent struct {
+	ID          string // プロバイダのイベントID(opaque。パース禁止)
+	ICalUID     string
+	StartUTC    time.Time
+	EndUTC      time.Time
+	IsAllDay    bool
+	AllDayStart string // "2006-01-02"(IsAllDay時のみ。現地日付)
+	AllDayEnd   string // 排他的終了日
+	IsBusy      bool
+	IsDeclined  bool
+	Deleted     bool   // cancelled / @removed / isCancelled
+	OriginTag   string // calsync タグが読めた場合のみ(Graph delta では常に "")
+}
+
+type Blocker struct {
+	Title          string
+	StartUTC       time.Time
+	EndUTC         time.Time
+	IsAllDay       bool
+	AllDayStart    string
+	AllDayEnd      string
+	TargetTimezone string // 終日ブロッカー作成用(Graph はこのTZの midnight 境界で作る)
+	OriginTag      string
+}
+
+type BlockerRecord struct {
+	EventID   string
+	OriginTag string
+	TimeHash  string
+}
+
+// OriginTag は "<origin_account_id>:<origin_event_id>"
+func OriginTagOf(accountID, eventID string) string { return accountID + ":" + eventID }
+
+// TimeHash: 予定時刻の変更検出用。16桁hex。
+func TimeHash(ev NormalizedEvent) string {
+	var s string
+	if ev.IsAllDay {
+		s = "allday|" + ev.AllDayStart + "|" + ev.AllDayEnd
+	} else {
+		s = ev.StartUTC.UTC().Format(time.RFC3339) + "|" + ev.EndUTC.UTC().Format(time.RFC3339)
+	}
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+var b32 = base32.NewEncoding("abcdefghijklmnopqrstuv0123456789").WithPadding(base32.NoPadding) // 疑似base32hex(Google許容文字 a-v0-9)
+
+// GoogleBlockerID: Google events.insert の id に指定するクライアント生成ID(冪等キー)。
+func GoogleBlockerID(originTag, targetAccount string) string {
+	sum := sha256.Sum256([]byte("gcal|" + originTag + "|" + targetAccount))
+	return "cs" + b32.EncodeToString(sum[:20])
+}
+
+// MSTransactionID: Graph イベント作成の transactionId(冪等キー)。
+func MSTransactionID(originTag, targetAccount string) string {
+	sum := sha256.Sum256([]byte("msgraph|" + originTag + "|" + targetAccount))
+	return "calsync-" + hex.EncodeToString(sum[:16])
+}
+
+func (w Window) Contains(ev NormalizedEvent) bool {
+	if ev.IsAllDay {
+		// 終日は現地日付だが、境界判定は日付をUTC日付として近似してよい(仕様5.3)
+		start, err1 := time.Parse("2006-01-02", ev.AllDayStart)
+		end, err2 := time.Parse("2006-01-02", ev.AllDayEnd)
+		if err1 != nil || err2 != nil {
+			return false
+		}
+		return end.After(w.Start) && start.Before(w.End)
+	}
+	return ev.EndUTC.After(w.Start) && ev.StartUTC.Before(w.End)
+}
+
+func (r CalendarRef) String() string { return fmt.Sprintf("%s/%s", r.AccountID, r.CalendarID) }

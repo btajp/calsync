@@ -1,0 +1,14 @@
+services:
+  calsync:
+    build: .
+    container_name: calsync
+    restart: unless-stopped
+    environment:
+      # reconcile_at("04:00" 等)はこの TZ で解釈される(仕様: コンテナのローカル TZ)
+      TZ: Asia/Tokyo
+    volumes:
+      # calsync.yaml / SQLite / OAuth トークン / GCP クライアント JSON をここに置く
+      - ./data:/data
+    # 既定コマンドは Dockerfile の CMD(--config /data/calsync.yaml --data /data)。
+    # 変更したい場合の例:
+    # command: ["--config", "/data/calsync.yaml", "--data", "/data"]
