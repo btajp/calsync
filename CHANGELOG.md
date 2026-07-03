@@ -20,8 +20,13 @@
 - **状態管理**: SQLite 1 ファイル(WAL、flock による多重起動防止、`status`/`doctor` 用の読み取り専用オープン)
 - **配布**: multi-stage Dockerfile(distroless、CGO 無効)、docker-compose 例、セットアップ要件を網羅した README(GCP「In production」必須手順、Entra アプリ登録、Docker での認証手順、プライバシー注記)
 
+### Added
+
+- **AGENTS.md**(AI エージェント向けプロジェクトガイド。`CLAUDE.md` はシンボリックリンク)と **`.agents/skills/calsync-setup`** スキル(セットアップ・アカウント追加の対話支援。組織/個人アカウントの分岐、ブラウザプロファイルを跨ぐ認可の注意、認可後のトークン実体検証を実測知見として収録。`.claude/skills` はシンボリックリンク)
+
 ### Fixed
 
+- **認可 URL に `prompt=select_account` を強制付与**。既定ブラウザに同意済みセッションが残っていると認可 UI なしで別アカウントのトークンが発行・保存される事故が実際に発生したため(誤トークンで作られたブロッカーは `accounts remove` で復旧可能なことも確認)、常にアカウント選択画面を挟む
 - **Microsoft ループバック認証の redirect_uri を「`localhost`・パスなし」形式に修正**。個人 Microsoft アカウント(login.live.com)はアプリ登録 `http://localhost` に対してポートは無視するがパスは照合するため、従来の `127.0.0.1:<port>/callback` 形式では認可が `invalid_request` で拒否されていた(実測 2026-07-03。MSAL と同じ形式に統一)
 
 ### Changed
