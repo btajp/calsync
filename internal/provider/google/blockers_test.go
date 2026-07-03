@@ -192,6 +192,7 @@ func TestCreateBlockerConflictResurrectsCancelledEvent(t *testing.T) {
 	require.Equal(t, "/calendars/primary/events/"+idem, reqs[2].Path)
 
 	m := decodeBody(t, reqs[2].Body)
+	require.Equal(t, "confirmed", m["status"], "蘇生ボディは status=confirmed を明示送信する")
 	require.Equal(t, "予定あり", m["summary"])
 	require.Equal(t, "opaque", m["transparency"])
 	require.Equal(t, "private", m["visibility"])

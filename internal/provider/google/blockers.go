@@ -105,7 +105,11 @@ func (c *Client) CreateBlocker(ctx context.Context, cal model.CalendarRef, b mod
 		if existing.Status != "cancelled" {
 			return existing.Id, nil
 		}
-		update := svc.Events.Update(cal.CalendarID, idemKey, blockerEventBody(b)).Context(ctx)
+		// Status を明示的に confirmed へ戻す(update ボディの status 省略時に
+		// cancelled のままになる実装差異に依存しない。仕様書15章 実測確認7と対)
+		body := blockerEventBody(b)
+		body.Status = "confirmed"
+		update := svc.Events.Update(cal.CalendarID, idemKey, body).Context(ctx)
 		var revived *calendar.Event
 		if err := c.doWithRetry(ctx, func() error {
 			var e error
