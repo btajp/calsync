@@ -89,9 +89,12 @@ func (e *Engine) FullResync(ctx context.Context, ref model.CalendarRef) error {
 // Reconcile はフルリコンサイル(仕様8章)。日次スケジュール(Task 18)と
 // `calsync reconcile`(Task 19)から呼ばれる。
 // フェーズ: (1) 全監視カレンダーの FullResync(カーソル張り直し + set-difference)
-// (2) pending 解決 (3) adoption(孤児ブロッカーの収容/掃除)(4) suppressed 再評価。
+// (2) pending 解決 (3) adoption(孤児ブロッカーの収容/掃除)
+// (4) 手で消されたブロッカーの再作成 (5) suppressed 再評価。
 // pending 解決を adoption より先に行うのは、pending 行に紐づく作成済みブロッカーを
-// adoption が孤児と誤認して掃除しないため。
+// adoption が孤児と誤認して掃除しないため。restoreMissingBlockers を adoption の
+// 後に置くのは、adoption が同じ回で active 化した行(遅れて実在確認できた分)も
+// 復元対象の判定に含めるため。
 // 1 カレンダーの障害で全体を止めず、エラーは集約して返す(仕様10章)。
 func (e *Engine) Reconcile(ctx context.Context) error {
 	var errs []error
@@ -108,6 +111,9 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 	}
 	if err := e.adoptOrphans(ctx); err != nil {
 		errs = append(errs, fmt.Errorf("adopt orphans: %w", err))
+	}
+	if err := e.restoreMissingBlockers(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("restore missing blockers: %w", err))
 	}
 	if err := e.reevaluateSuppressed(ctx); err != nil {
 		errs = append(errs, fmt.Errorf("reevaluate suppressed: %w", err))
@@ -209,6 +215,61 @@ func (e *Engine) adoptOrphans(ctx context.Context) error {
 				Status:         store.StatusActive,
 			}
 			if err := e.Store.PutMapping(m); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// restoreMissingBlockers は「手で消されたブロッカーの再作成」を行う(仕様8章4:
+// 元予定が生きている限りブロッカーは維持する、確定仕様)。processEvent の
+// time_hash 一致判定(upsertBlockers の default ケース)はプロバイダを一切
+// 呼ばないため、ブロッカー本体だけが手動削除されても通常の同期では検知できない
+// (最終ホールブランチレビュー所見2)。
+//
+// 各アカウントのブロッカー書き込み先を ListBlockers で列挙して実在 ID 集合を作り、
+// そのアカウントを target とする active mapping のうち BlockerEventID がその集合に
+// 無い行を、origin イベントがキャッシュに残っていれば createFromMapping(既存の
+// pending→CreateBlocker→active の流れ)で再作成する。origin がキャッシュに無ければ
+// スキップする(次回 FullResync が整合を回復する)。
+// 実プロバイダでは決定的な冪等キーでの再送が 409 → cancelled 蘇生の経路を通るため
+// (修正1)、fake のようにキーを解放して新規作成になる意味論・実プロバイダのように
+// 蘇生になる意味論のどちらでも成立する。
+func (e *Engine) restoreMissingBlockers(ctx context.Context) error {
+	w := e.currentWindow()
+	for _, acct := range e.Cfg.Accounts {
+		ref := model.CalendarRef{AccountID: acct.ID, CalendarID: acct.BlockerCalendar}
+		p, err := e.providerFor(acct.ID)
+		if err != nil {
+			return err
+		}
+		recs, err := p.ListBlockers(ctx, ref, w)
+		if err != nil {
+			return err
+		}
+		existing := make(map[string]bool, len(recs))
+		for _, rec := range recs {
+			existing[rec.EventID] = true
+		}
+
+		maps, err := e.Store.ListMappingsWhereTargetAccount(acct.ID)
+		if err != nil {
+			return err
+		}
+		for _, m := range maps {
+			if m.Status != store.StatusActive || existing[m.BlockerEventID] {
+				continue
+			}
+			originRef := model.CalendarRef{AccountID: m.OriginAccount, CalendarID: m.OriginCalendar}
+			ev, err := e.Store.GetEvent(originRef, m.OriginEventID)
+			if err != nil {
+				return err
+			}
+			if ev == nil {
+				continue // origin がキャッシュに無い → 次回 FullResync が整合を回復する
+			}
+			if err := e.createFromMapping(ctx, m, *ev); err != nil {
 				return err
 			}
 		}

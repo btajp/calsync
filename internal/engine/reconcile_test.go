@@ -415,6 +415,66 @@ func TestReconcile_DropsSuppressedWhenOriginGone(t *testing.T) {
 	require.Empty(t, f.Blockers(calBv))
 }
 
+// 手で消されたブロッカーの再作成(仕様8章4: 元予定が生きている限りブロッカーは
+// 維持する、確定仕様)。active mapping はそのままに、ブロッカー本体だけを
+// DeleteBlocker で直接消す(手動削除の再現)。processEvent の time_hash 一致判定は
+// プロバイダを一切呼ばないため(engine.go upsertBlockers の default ケース)、この
+// 消失は restoreMissingBlockers でしか検知できない(最終ホールブランチレビュー所見2)。
+func TestReconcile_RestoresManuallyDeletedBlocker(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	ev := busyEvent("ev1")
+
+	f.SetFullState(refA, []model.NormalizedEvent{ev})
+	require.NoError(t, e.SyncCalendar(ctx, refA))
+
+	before, err := e.Store.GetMapping("a", "primary", "ev1", "b")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.Equal(t, store.StatusActive, before.Status)
+	require.NotEmpty(t, before.BlockerEventID)
+
+	// 手動削除の再現: mapping には触れず、ブロッカー本体だけを消す
+	require.NoError(t, f.DeleteBlocker(ctx, calBv, before.BlockerEventID))
+	require.Empty(t, f.Blockers(calBv))
+
+	require.NoError(t, e.Reconcile(ctx))
+
+	after, err := e.Store.GetMapping("a", "primary", "ev1", "b")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.Equal(t, store.StatusActive, after.Status, "再作成後も active")
+	require.NotEmpty(t, after.BlockerEventID, "新しいブロッカー ID が記録される")
+
+	blks := f.Blockers(calBv)
+	require.Len(t, blks, 1)
+	require.Equal(t, "a:ev1", blks[0].OriginTag)
+	require.Equal(t, after.BlockerEventID, blks[0].EventID)
+}
+
+// 実在するブロッカーは再作成の対象にならない(余計な CreateBlocker が起きない)。
+func TestReconcile_DoesNotRecreateBlockerThatStillExists(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	ev := busyEvent("ev1")
+
+	f.SetFullState(refA, []model.NormalizedEvent{ev})
+	require.NoError(t, e.SyncCalendar(ctx, refA))
+
+	before, err := e.Store.GetMapping("a", "primary", "ev1", "b")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.Len(t, f.Blockers(calBv), 1)
+
+	require.NoError(t, e.Reconcile(ctx))
+
+	after, err := e.Store.GetMapping("a", "primary", "ev1", "b")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.Equal(t, before.BlockerEventID, after.BlockerEventID, "既存ブロッカーの ID は変わらない")
+	require.Len(t, f.Blockers(calBv), 1, "余計な CreateBlocker は起きない")
+}
+
 // errCreateBlockerBoom は onceFailingCreateProvider が注入する CreateBlocker の失敗。
 var errCreateBlockerBoom = errors.New("boom: create blocker failed")
 
