@@ -140,6 +140,43 @@ func TestCreateBlockerConflictReturnsExistingID(t *testing.T) {
 	requireCommonHeaders(t, reqs)
 }
 
+// TestFindBlockerByOriginTagEncodesSpacesAsPercent20 は 409 収容時の
+// findBlockerByOriginTag が発行する $filter クエリで、空白が "+" ではなく
+// "%20" でエンコードされていることを確認する。net/url は "+" と "%20" を
+// symmetric に相互変換するため r.URL.Query() 経由の検査では検出できず、
+// 実際にワイヤへ送られるバイト列である r.URL.RawQuery を直接見る必要がある
+// (Microsoft Graph の OData パーサは $filter/$expand 中の空白代替 "+" を
+// 受理しない既知挙動があるため)。
+func TestFindBlockerByOriginTagEncodesSpacesAsPercent20(t *testing.T) {
+	var rawQuery string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/me/events", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusConflict)
+			fmt.Fprint(w, `{"error":{"code":"ErrorDuplicateTransactionId","message":"duplicate transactionId"}}`)
+			return
+		}
+		rawQuery = r.URL.RawQuery
+		fmt.Fprint(w, `{"value":[{"id":"existing-ev-9"}]}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL, []string{"busy"})
+	b := model.Blocker{
+		Title:     "予定あり",
+		StartUTC:  time.Date(2026, 7, 10, 1, 0, 0, 0, time.UTC),
+		EndUTC:    time.Date(2026, 7, 10, 2, 0, 0, 0, time.UTC),
+		OriginTag: "personal:ev1",
+	}
+	_, err := c.CreateBlocker(context.Background(), testCal, b, "calsync-abc123")
+	require.NoError(t, err)
+
+	require.NotEmpty(t, rawQuery)
+	require.Contains(t, rawQuery, "%20", "raw query must percent-encode spaces as %%20: %s", rawQuery)
+	require.NotContains(t, rawQuery, "+", "raw query must not contain a literal '+' (Graph rejects it as a space substitute in $filter/$expand): %s", rawQuery)
+}
+
 func TestUpdateBlocker(t *testing.T) {
 	var reqs []recordedRequest
 	handler := func(w http.ResponseWriter, r *http.Request) {
@@ -262,6 +299,45 @@ func TestListBlockers(t *testing.T) {
 		u1.Query().Get("$expand"))
 
 	requireCommonHeaders(t, reqs)
+}
+
+// TestListBlockersEncodesSpacesAsPercent20 は ListBlockers の一覧 $filter と、
+// 各件取得(getBlockerRecord)の $expand の両方で、空白が "+" ではなく "%20"
+// でエンコードされていることを確認する。デコード後の r.URL.Query() では
+// net/url が "+"/"%20" を対称変換してしまい検出できないため、実際に送信
+// されたバイト列である r.URL.RawQuery を直接検査する。
+func TestListBlockersEncodesSpacesAsPercent20(t *testing.T) {
+	var listRawQuery, itemRawQuery string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/me/events", func(w http.ResponseWriter, r *http.Request) {
+		listRawQuery = r.URL.RawQuery
+		fmt.Fprint(w, `{"value":[{"id":"blk-1"}]}`)
+	})
+	mux.HandleFunc("/me/events/blk-1", func(w http.ResponseWriter, r *http.Request) {
+		itemRawQuery = r.URL.RawQuery
+		fmt.Fprint(w, `{"id":"blk-1","isAllDay":false,
+			"start":{"dateTime":"2026-07-10T01:00:00.0000000","timeZone":"UTC"},
+			"end":{"dateTime":"2026-07-10T02:00:00.0000000","timeZone":"UTC"},
+			"singleValueExtendedProperties":[{"id":"String {b7dbd76c-3a35-4b41-9d80-6a3f31f2a6b9} Name calsyncOrigin","value":"personal:ev1"}]}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL, []string{"busy"})
+	_, err := c.ListBlockers(context.Background(), testCal, testWindow)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{"$filter (list)", listRawQuery},
+		{"$expand (item)", itemRawQuery},
+	} {
+		require.NotEmpty(t, tc.raw, tc.name)
+		require.Contains(t, tc.raw, "%20", "%s: raw query must percent-encode spaces as %%20: %s", tc.name, tc.raw)
+		require.NotContains(t, tc.raw, "+", "%s: raw query must not contain a literal '+' (Graph rejects it as a space substitute in $filter/$expand): %s", tc.name, tc.raw)
+	}
 }
 
 func TestGetCalendarTimezone(t *testing.T) {

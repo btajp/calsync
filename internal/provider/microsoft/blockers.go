@@ -64,6 +64,16 @@ func blockerBody(b model.Blocker, idemKey string) graphEventBody {
 // odataQuote escapes single quotes for OData string literals.
 func odataQuote(s string) string { return strings.ReplaceAll(s, "'", "''") }
 
+// encodeQuery encodes q and rewrites the space encoding from "+" to "%20":
+// Microsoft Graph's OData parser rejects "+" as a space substitute inside
+// $filter/$expand (known Graph behavior), even though it is otherwise a
+// valid application/x-www-form-urlencoded convention that Go's url.Values.Encode
+// produces. This is safe for literal "+" bytes in values too, since
+// url.Values.Encode already percent-escapes them as "%2B" before this
+// function ever sees the string, so the blanket "+"->"%20" replace only
+// ever touches encoded spaces.
+func encodeQuery(q url.Values) string { return strings.ReplaceAll(q.Encode(), "+", "%20") }
+
 // CreateBlocker implements provider.Provider. idemKey becomes the Graph
 // transactionId; a 409 (duplicate transactionId) is resolved by looking up
 // the existing event via its origin tag and returning its ID.
@@ -104,7 +114,7 @@ func (c *Client) findBlockerByOriginTag(ctx context.Context, originTag string) (
 		"singleValueExtendedProperties/Any(ep: ep/id eq '%s' and ep/value eq '%s')",
 		originPropertyID, odataQuote(originTag)))
 	q.Set("$select", "id")
-	status, body, err := c.doRead(ctx, http.MethodGet, c.baseURL+"/me/events?"+q.Encode(), nil)
+	status, body, err := c.doRead(ctx, http.MethodGet, c.baseURL+"/me/events?"+encodeQuery(q), nil)
 	if err != nil {
 		return "", err
 	}
@@ -163,7 +173,7 @@ func (c *Client) ListBlockers(ctx context.Context, cal model.CalendarRef, window
 	q.Set("$filter", fmt.Sprintf(
 		"singleValueExtendedProperties/Any(ep: ep/id eq '%s' and ep/value ne null)",
 		originPropertyID))
-	listURL := c.baseURL + "/me/events?" + q.Encode()
+	listURL := c.baseURL + "/me/events?" + encodeQuery(q)
 
 	var records []model.BlockerRecord
 	for listURL != "" {
@@ -201,7 +211,7 @@ func (c *Client) getBlockerRecord(ctx context.Context, eventID string) (model.Bl
 	q := url.Values{}
 	q.Set("$expand", fmt.Sprintf("singleValueExtendedProperties($filter=id eq '%s')", originPropertyID))
 	status, body, err := c.doRead(ctx, http.MethodGet,
-		c.baseURL+"/me/events/"+url.PathEscape(eventID)+"?"+q.Encode(), nil)
+		c.baseURL+"/me/events/"+url.PathEscape(eventID)+"?"+encodeQuery(q), nil)
 	if err != nil {
 		return model.BlockerRecord{}, err
 	}
