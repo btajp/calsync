@@ -116,3 +116,15 @@ func TestRunDoctorAllOK(t *testing.T) {
 	require.NoError(t, runDoctor(context.Background(), cfg, dir, probe, &out, "calsync.yaml"))
 	require.Contains(t, out.String(), "all checks passed")
 }
+
+func TestOauthConfigForMicrosoftUsesLocalhostRedirect(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Providers.Microsoft.ClientID = "client-id"
+	acct := config.Account{ID: "outlook", Provider: "microsoft"}
+
+	oc, err := oauthConfigFor(cfg, acct)
+	require.NoError(t, err)
+	// Entra/MSA のアプリ登録 http://localhost は 127.0.0.1 と照合されない
+	// (実測: login.live.com が invalid_request で拒否)。ホスト名は localhost 固定。
+	require.Equal(t, "http://localhost/callback", oc.RedirectURL)
+}
