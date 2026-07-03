@@ -105,22 +105,31 @@ func normalizeAuthErr(err error) error {
 	return provider.NormalizeAuthErr(err)
 }
 
-// GetCalendarTimezone は calendars.get の timeZone(IANA 名)を返す。
+// GetCalendarTimezone はカレンダーのタイムゾーン(IANA 名)を返す。
 // 終日ブロッカー作成時の現地日付境界の決定に使う(仕様書6.6)。
+//
+// calendars.get は calendar.readonly 系スコープを要求し、calsync が要求する
+// calendar.events スコープでは実環境で 403 になる(最終ホールブランチレビュー
+// 追補 Issue 1)。events.list の応答エンベロープにも同じ timeZone フィールドが
+// 含まれ、こちらは calendar.events スコープで読めるため、maxResults=1 の軽量な
+// events.list から取得する。
 func (c *Client) GetCalendarTimezone(ctx context.Context, cal model.CalendarRef) (string, error) {
 	svc, err := c.service(ctx)
 	if err != nil {
 		return "", err
 	}
-	call := svc.Calendars.Get(cal.CalendarID).Context(ctx)
-	var got *calendar.Calendar
+	call := svc.Events.List(cal.CalendarID).MaxResults(1).Context(ctx)
+	var got *calendar.Events
 	err = c.doWithRetry(ctx, func() error {
 		var e error
 		got, e = call.Do()
 		return e
 	})
 	if err != nil {
-		return "", fmt.Errorf("google[%s]: calendars.get %s: %w", c.accountID, cal, normalizeAuthErr(err))
+		return "", fmt.Errorf("google[%s]: events.list timezone %s: %w", c.accountID, cal, normalizeAuthErr(err))
+	}
+	if got.TimeZone == "" {
+		return "", fmt.Errorf("google[%s]: events.list %s returned no timeZone", c.accountID, cal)
 	}
 	return got.TimeZone, nil
 }

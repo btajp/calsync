@@ -69,7 +69,13 @@ func oauthConfigFor(cfg *config.Config, acct config.Account) (*oauth2.Config, er
 				TokenURL:      "https://login.microsoftonline.com/common/oauth2/v2.0/token",
 				DeviceAuthURL: "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode",
 			},
-			Scopes: []string{"offline_access", "https://graph.microsoft.com/Calendars.ReadWrite"},
+			// MailboxSettings.Read は GetCalendarTimezone(/me/mailboxSettings/timeZone)
+			// に必要(Calendars.ReadWrite だけでは 403。最終ホールブランチレビュー追補 Issue 1)
+			Scopes: []string{
+				"offline_access",
+				"https://graph.microsoft.com/Calendars.ReadWrite",
+				"https://graph.microsoft.com/MailboxSettings.Read",
+			},
 		}, nil
 	default:
 		return nil, fmt.Errorf("account %s: unknown provider %q", acct.ID, acct.Provider)

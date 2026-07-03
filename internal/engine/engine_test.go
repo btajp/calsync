@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -125,12 +126,11 @@ func TestProcessEvent_CreateOnAllTargets(t *testing.T) {
 	cases := []struct {
 		cal     model.CalendarRef
 		acct    string
-		tz      string
 		idemKey string
 	}{
 		// b は microsoft → transactionId / c は google → クライアント生成イベントID
-		{calBv, "b", "Asia/Tokyo", model.MSTransactionID(wantTag, "b")},
-		{calCv, "c", "America/New_York", model.GoogleBlockerID(wantTag, "c")},
+		{calBv, "b", model.MSTransactionID(wantTag, "b")},
+		{calCv, "c", model.GoogleBlockerID(wantTag, "c")},
 	}
 	for _, tc := range cases {
 		blks := f.Blockers(tc.cal)
@@ -140,8 +140,8 @@ func TestProcessEvent_CreateOnAllTargets(t *testing.T) {
 
 		body, ok := f.StoredBlocker(tc.cal, blks[0].EventID)
 		require.True(t, ok)
-		require.Equal(t, "予定あり", body.Title)         // Cfg.BlockerTitle
-		require.Equal(t, tc.tz, body.TargetTimezone) // calendars.timezone から
+		require.Equal(t, "予定あり", body.Title)  // Cfg.BlockerTitle
+		require.Empty(t, body.TargetTimezone) // 時刻指定は UTC 固定で送るため TZ 不要(仕様6.6)
 		require.Equal(t, wantTag, body.OriginTag)
 
 		m, err := e.Store.GetMapping("a", "primary", "ev1", tc.acct)
@@ -243,14 +243,19 @@ func TestProcessEvent_AllDayBlockerKeepsLocalDates(t *testing.T) {
 	require.Equal(t, "Asia/Tokyo", body.TargetTimezone) // Graph はこの TZ の midnight 境界で作る
 }
 
-// calendars.timezone が未キャッシュなら provider から取得して保存する
+// calendars.timezone が未キャッシュなら(終日イベントの配布時に)provider から
+// 取得して保存する
 func TestUpsertBlockers_FetchesTimezoneWhenNotCached(t *testing.T) {
 	e, f := newTestEngine(t)
 	ctx := context.Background()
 	require.NoError(t, e.Store.DeleteCalendarsForAccount("c")) // c のキャッシュを消す
 	f.SetTimezone(calCv, "Europe/Berlin")
 
-	require.NoError(t, e.processEvent(ctx, refA, busyEvent("ev1")))
+	allDay := model.NormalizedEvent{
+		ID: "allday1", ICalUID: "allday1@example.com", IsBusy: true,
+		IsAllDay: true, AllDayStart: "2026-07-15", AllDayEnd: "2026-07-16",
+	}
+	require.NoError(t, e.processEvent(ctx, refA, allDay))
 
 	blks := f.Blockers(calCv)
 	require.Len(t, blks, 1)
@@ -262,6 +267,55 @@ func TestUpsertBlockers_FetchesTimezoneWhenNotCached(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, st)
 	require.Equal(t, "Europe/Berlin", st.Timezone) // calendars.timezone にキャッシュされる
+}
+
+// tzCountingProvider は GetCalendarTimezone の呼び出し回数を数えるラッパー
+// (タイムゾーン取得の遅延化=時刻指定イベントでは呼ばれないことの検証用)。
+type tzCountingProvider struct {
+	provider.Provider
+	mu    sync.Mutex
+	calls int
+}
+
+func (p *tzCountingProvider) GetCalendarTimezone(ctx context.Context, cal model.CalendarRef) (string, error) {
+	p.mu.Lock()
+	p.calls++
+	p.mu.Unlock()
+	return p.Provider.GetCalendarTimezone(ctx, cal)
+}
+
+func (p *tzCountingProvider) count() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+// 時刻指定イベントの配布では GetCalendarTimezone を呼ばない(仕様6.6:
+// タイムゾーンは終日ブロッカーにしか使われない。毎イベントの TZ 取得は
+// スコープ要求と API コールの両面で無駄。最終ホールブランチレビュー追補 Issue 1)。
+func TestUpsertBlockers_TimedEventDoesNotFetchTimezone(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	// TZ キャッシュを消し、「呼ばれるなら必ず provider に到達する」状態にする
+	require.NoError(t, e.Store.DeleteCalendarsForAccount("b"))
+	require.NoError(t, e.Store.DeleteCalendarsForAccount("c"))
+	cp := &tzCountingProvider{Provider: f}
+	e.Providers["b"] = cp
+	e.Providers["c"] = cp
+
+	require.NoError(t, e.processEvent(ctx, refA, busyEvent("ev1")))
+
+	require.Len(t, f.Blockers(calBv), 1)
+	require.Len(t, f.Blockers(calCv), 1)
+	require.Zero(t, cp.count(), "時刻指定イベントでは GetCalendarTimezone を呼ばない")
+
+	// 終日イベントでは取得される(カウンタが機能していることの対照)
+	allDay := model.NormalizedEvent{
+		ID: "allday1", ICalUID: "allday1@example.com", IsBusy: true,
+		IsAllDay: true, AllDayStart: "2026-07-15", AllDayEnd: "2026-07-16",
+	}
+	require.NoError(t, e.processEvent(ctx, refA, allDay))
+	require.Positive(t, cp.count(), "終日イベントでは GetCalendarTimezone が呼ばれる")
 }
 
 // ---- (a) mappings の blocker_event_id 一致で無視(ループ遮断・一次判定) ----

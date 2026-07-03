@@ -338,11 +338,15 @@ func TestListBlockers(t *testing.T) {
 	require.Equal(t, "page-2", reqs[1].Query.Get("pageToken"))
 }
 
+// GetCalendarTimezone は calendars.get ではなく events.list(maxResults=1)の
+// 応答エンベロープの timeZone を使う。calendars.get は calendar.readonly 系
+// スコープが必要で、calsync の calendar.events スコープでは実環境 403 になる
+// (最終ホールブランチレビュー追補 Issue 1)。
 func TestGetCalendarTimezone(t *testing.T) {
 	rec := &recorder{}
 	handler := rec.wrap(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"id": "primary", "timeZone": "Asia/Tokyo"}`)
+		fmt.Fprint(w, `{"timeZone": "Asia/Tokyo", "items": [], "nextSyncToken": "s"}`)
 	})
 	c := newTestClient(t, handler)
 
@@ -353,5 +357,19 @@ func TestGetCalendarTimezone(t *testing.T) {
 	reqs := rec.all()
 	require.Len(t, reqs, 1)
 	require.Equal(t, http.MethodGet, reqs[0].Method)
-	require.Equal(t, "/calendars/primary", reqs[0].Path, "calendars.get を使う")
+	require.Equal(t, "/calendars/primary/events", reqs[0].Path, "events.list を使う(calendars.get はスコープ不足)")
+	require.Equal(t, "1", reqs[0].Query.Get("maxResults"), "maxResults=1 で軽量に取得する")
+}
+
+// events.list が timeZone を返さない場合はエラー(空 TZ をキャッシュしない)。
+func TestGetCalendarTimezoneMissingIsError(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"items": []}`)
+	})
+	c := newTestClient(t, handler)
+
+	_, err := c.GetCalendarTimezone(context.Background(), testRef)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no timeZone")
 }

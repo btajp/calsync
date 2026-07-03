@@ -271,12 +271,18 @@ func (e *Engine) deleteBlockersForOrigin(ctx context.Context, ref model.Calendar
 }
 
 // blockerFor は origin イベントからターゲット用の Blocker を組み立てる。
-// TargetTimezone は calendars.timezone のキャッシュを優先し、無ければ
-// provider から取得して calendars テーブルへキャッシュする(仕様6.6)。
+// TargetTimezone は終日ブロッカーの現地日付境界の決定にしか使われない(仕様6.6。
+// 時刻指定は両プロバイダとも UTC 固定で送る)ため、IsAllDay のときだけ取得する。
+// 取得時は calendars.timezone のキャッシュを優先し、無ければ provider から
+// 取得して calendars テーブルへキャッシュする。
 func (e *Engine) blockerFor(ctx context.Context, ev model.NormalizedEvent, originTag string, targetCal model.CalendarRef, p provider.Provider) (model.Blocker, error) {
-	tz, err := e.targetTimezone(ctx, targetCal, p)
-	if err != nil {
-		return model.Blocker{}, err
+	tz := ""
+	if ev.IsAllDay {
+		var err error
+		tz, err = e.targetTimezone(ctx, targetCal, p)
+		if err != nil {
+			return model.Blocker{}, err
+		}
 	}
 	return model.Blocker{
 		Title:          e.Cfg.BlockerTitle,
