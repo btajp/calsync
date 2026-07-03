@@ -315,6 +315,7 @@ func TestRunLoopbackFlowBareRedirectPath(t *testing.T) {
 	require.Equal(t, "localhost", ru.Hostname(), "ホスト名は cfg のヒントを維持する")
 	require.Empty(t, ru.Path, "MSA はパスまで照合するため redirect_uri はパスなしであること")
 	require.NotEmpty(t, ru.Port(), "実ポートが差し込まれていること")
+	require.Equal(t, "select_account", u.Query().Get("prompt"), "同意済みセッションの無言再発行を防ぐためアカウント選択を強制する")
 
 	// コールバックはパスなし(ルート)で受ける。リスナーは 127.0.0.1 なので直接叩く
 	state := u.Query().Get("state")

@@ -63,7 +63,12 @@ func runLoopbackFlow(ctx context.Context, cfg *oauth2.Config, port int, out io.W
 		return nil, fmt.Errorf("generate state: %w", err)
 	}
 	verifier := oauth2.GenerateVerifier()
-	authURL := conf.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(verifier))
+	// prompt=select_account: 既定ブラウザに同意済みセッションが残っていると
+	// Google/Microsoft とも UI なしで即コードを発行し、別アカウントのトークンが
+	// 意図せず保存される(実測 2026-07-03)。常にアカウント選択を挟んで防ぐ。
+	authURL := conf.AuthCodeURL(state, oauth2.AccessTypeOffline,
+		oauth2.S256ChallengeOption(verifier),
+		oauth2.SetAuthURLParam("prompt", "select_account"))
 
 	resultCh := make(chan flowResult, 1)
 	var once sync.Once
