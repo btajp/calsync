@@ -20,9 +20,22 @@
 - **状態管理**: SQLite 1 ファイル(WAL、flock による多重起動防止、`status`/`doctor` 用の読み取り専用オープン)
 - **配布**: multi-stage Dockerfile(distroless、CGO 無効)、docker-compose 例、セットアップ要件を網羅した README(GCP「In production」必須手順、Entra アプリ登録、Docker での認証手順、プライバシー注記)
 
+### Fixed
+
+- **Microsoft ループバック認証の redirect_uri を「`localhost`・パスなし」形式に修正**。個人 Microsoft アカウント(login.live.com)はアプリ登録 `http://localhost` に対してポートは無視するがパスは照合するため、従来の `127.0.0.1:<port>/callback` 形式では認可が `invalid_request` で拒否されていた(実測 2026-07-03。MSAL と同じ形式に統一)
+
+### Changed
+
+- README: Google の「6 ヶ月」系制限は常時稼働していれば定期作業不要であることを明記。Google Workspace 組織で GCP が無効な場合の構成(個人アカウントの GCP プロジェクトでクライアント共用)と第三者アプリアクセス制御の注意、Entra 新 UI(Authentication (Preview) → 設定タブ)での設定位置を追記
+
+### 実機検証の状況(2026-07-03)
+
+- 実 Google / Microsoft API で確認済み: OAuth 認可(両プロバイダ・未検証アプリのクリックスルー含む)、最小スコープでの疎通(Google `calendar.events` のみ / MSA の `MailboxSettings.Read`)、双方向の差分同期(syncToken / calendarView delta)、双方向のブロッカー作成(6件+1件)、transparent な終日予定の除外
+- 未実測(設計書 15 章のスパイクリスト参照): Graph 終日イベントの UTC 変換挙動、Google 409 での cancelled ブロッカー蘇生、`docker build` の実行確認
+
 ### 既知の制約(v1)
 
 - Microsoft アカウントはプライマリカレンダーのみ監視・書き込み可
 - 過去方向の同期はしない。ブロッカーのマージはしない(元予定 1 : ブロッカー 1)
 - 単一インスタンス前提(同一データディレクトリでの多重起動は flock で拒否)
-- 実 Google / Microsoft API に対する疎通確認は未実施(設計書 15 章のスパイクチェックリスト参照)
+- 実 API での検証状況は上記「実機検証の状況」を参照(主要経路は確認済み・一部未実測)
