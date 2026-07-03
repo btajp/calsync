@@ -93,7 +93,7 @@ func TestRunSkipsReauthAccountAndContinuesOthers(t *testing.T) {
 	f.SetFullState(refA, []model.NormalizedEvent{schedEvent("evA", now.Add(time.Hour))})
 	f.FailNext(refA, provider.ErrAuthExpired)
 	// b: busy 予定 evB → ターゲット a にブロッカーが立つはず(b の同期は継続する証拠)。
-	f.SetFullState(refB, []model.NormalizedEvent{schedEvent("evB", now.Add(2 * time.Hour))})
+	f.SetFullState(refB, []model.NormalizedEvent{schedEvent("evB", now.Add(2*time.Hour))})
 
 	cfg := &config.Config{
 		PollInterval:      10 * time.Millisecond,
@@ -146,4 +146,98 @@ func TestRunSkipsReauthAccountAndContinuesOthers(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, calA)
 	require.Contains(t, calA.LastError, "reauth_required")
+}
+
+// TestTickPersistsSuccessOnSyncCalendar は成功ティック後に last_error が空で
+// last_synced_at が更新されていることを確認する(`calsync status` が参照する状態)。
+func TestTickPersistsSuccessOnSyncCalendar(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	require.NoError(t, err)
+	defer st.Close()
+
+	ref := model.CalendarRef{AccountID: "a", CalendarID: "primary"}
+	require.NoError(t, st.UpsertCalendar(ref))
+
+	f := fake.New()
+	f.SetTimezone(ref, "UTC")
+	f.SetFullState(ref, nil) // イベントなし → 同期は成功で完走する
+
+	cfg := &config.Config{
+		SyncWindowMonths: 3,
+		BlockerTitle:     "予定あり",
+		Accounts: []config.Account{
+			{ID: "a", Provider: "google", Calendars: []string{"primary"}, BlockerCalendar: "primary"},
+		},
+	}
+	e := &Engine{
+		Store:     st,
+		Providers: map[string]provider.Provider{"a": f},
+		Cfg:       cfg,
+		Now:       time.Now,
+	}
+
+	e.tick(context.Background(), map[string]bool{})
+
+	got, err := st.GetCalendar(ref)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Empty(t, got.LastError)
+	require.False(t, got.LastSyncedAt.IsZero())
+}
+
+// TestTickClearsPriorReauthErrorOnSuccess は reauth_required で汚れた last_error が
+// 再認証成功後の成功ティックでクリアされることを確認する(復旧後も
+// `calsync status` が古いエラーを表示し続ける問題の回帰テスト)。
+func TestTickClearsPriorReauthErrorOnSuccess(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	require.NoError(t, err)
+	defer st.Close()
+
+	ref := model.CalendarRef{AccountID: "a", CalendarID: "primary"}
+	require.NoError(t, st.UpsertCalendar(ref))
+	require.NoError(t, st.SetCalendarError(ref, "reauth_required: run `calsync auth add a`"))
+
+	f := fake.New()
+	f.SetTimezone(ref, "UTC")
+	f.SetFullState(ref, nil)
+
+	cfg := &config.Config{
+		SyncWindowMonths: 3,
+		BlockerTitle:     "予定あり",
+		Accounts: []config.Account{
+			{ID: "a", Provider: "google", Calendars: []string{"primary"}, BlockerCalendar: "primary"},
+		},
+	}
+	e := &Engine{
+		Store:     st,
+		Providers: map[string]provider.Provider{"a": f},
+		Cfg:       cfg,
+		Now:       time.Now,
+	}
+
+	e.tick(context.Background(), map[string]bool{})
+
+	got, err := st.GetCalendar(ref)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Empty(t, got.LastError, "reauth_required は再認証成功後にクリアされるべき")
+}
+
+// TestRunWithoutNowDoesNotPanic は Engine.Now を設定しないまま Run を実行しても
+// nil パニックしないことを確認する(nil セーフな e.now() 経由であることの回帰テスト)。
+func TestRunWithoutNowDoesNotPanic(t *testing.T) {
+	cfg := &config.Config{
+		PollInterval: 10 * time.Millisecond,
+		ReconcileAt:  "04:00",
+	}
+	e := &Engine{Cfg: cfg} // Now は意図的に未設定(nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // 即キャンセルして短時間で Run を終了させる
+
+	var runErr error
+	require.NotPanics(t, func() {
+		runErr = e.Run(ctx)
+	})
+	require.NoError(t, runErr)
 }

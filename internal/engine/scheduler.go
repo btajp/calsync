@@ -37,7 +37,7 @@ func nextReconcileAt(now time.Time, hhmm string) time.Time {
 //   - ctx キャンセルで nil を返して終了する
 func (e *Engine) Run(ctx context.Context) error {
 	reauth := make(map[string]bool) // account ID -> reauth_required
-	next := nextReconcileAt(e.Now(), e.Cfg.ReconcileAt)
+	next := nextReconcileAt(e.now(), e.Cfg.ReconcileAt)
 	ticker := time.NewTicker(e.Cfg.PollInterval)
 	defer ticker.Stop()
 
@@ -50,11 +50,11 @@ func (e *Engine) Run(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 		}
-		if !e.Now().Before(next) {
+		if !e.now().Before(next) {
 			if err := e.Reconcile(ctx); err != nil {
 				log.Printf("reconcile: %v", err)
 			}
-			next = nextReconcileAt(e.Now(), e.Cfg.ReconcileAt)
+			next = nextReconcileAt(e.now(), e.Cfg.ReconcileAt)
 			// 日次リコンサイルのタイミングで reauth スキップを解除し再試行する
 			// (再認証済みなら次のティックから自動バックフィルされる)
 			reauth = make(map[string]bool)
@@ -76,6 +76,13 @@ func (e *Engine) tick(ctx context.Context, reauth map[string]bool) {
 			ref := model.CalendarRef{AccountID: acct.ID, CalendarID: calID}
 			err := e.SyncCalendar(ctx, ref)
 			if err == nil {
+				// 成功した同期を記録する: 過去の last_error(reauth_required 等)を
+				// クリアし、last_synced_at を更新する(仕様11章の calsync status が
+				// 参照する)。SetCalendarError は "" 指定でエラークリア + 時刻更新の
+				// 両方を担う(store 契約)。
+				if serr := e.Store.SetCalendarError(ref, ""); serr != nil {
+					log.Printf("clear calendar error %s: %v", ref, serr)
+				}
 				continue
 			}
 			if errors.Is(err, provider.ErrAuthExpired) {
