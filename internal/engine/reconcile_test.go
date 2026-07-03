@@ -452,6 +452,49 @@ func TestReconcile_RestoresManuallyDeletedBlocker(t *testing.T) {
 	require.Equal(t, after.BlockerEventID, blks[0].EventID)
 }
 
+// UpdateBlocker が provider.ErrNotFound を返した場合(ブロッカー手動削除後に
+// 元予定の時刻が変わったケース)、upsertBlockers は mapping を pending 化して
+// createFromMapping で再作成する(リコンサイルを待たない即時フォールバック)。
+// fake の UpdateBlocker は未存在 ID に対して自然に ErrNotFound を返す。
+func TestUpsertBlockers_UpdateNotFoundRecreatesBlocker(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	ev := busyEvent("ev1")
+
+	f.SetFullState(refA, []model.NormalizedEvent{ev})
+	require.NoError(t, e.SyncCalendar(ctx, refA))
+
+	before, err := e.Store.GetMapping("a", "primary", "ev1", "b")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+
+	// 手動削除の再現: mapping には触れず、b 上のブロッカー本体だけを消す
+	require.NoError(t, f.DeleteBlocker(ctx, calBv, before.BlockerEventID))
+	require.Empty(t, f.Blockers(calBv))
+
+	// 元予定の時刻変更 → time_hash 不一致で UpdateBlocker 分岐に入る
+	moved := ev
+	moved.EndUTC = ev.EndUTC.Add(30 * time.Minute)
+	require.NoError(t, e.processEvent(ctx, refA, moved))
+
+	after, err := e.Store.GetMapping("a", "primary", "ev1", "b")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.Equal(t, store.StatusActive, after.Status)
+	require.NotEmpty(t, after.BlockerEventID)
+	require.Equal(t, model.TimeHash(moved), after.TimeHash)
+
+	blks := f.Blockers(calBv)
+	require.Len(t, blks, 1, "ブロッカーが再作成される")
+	require.Equal(t, after.BlockerEventID, blks[0].EventID)
+	require.Equal(t, model.TimeHash(moved), blks[0].TimeHash, "再作成は変更後の時刻で行われる")
+
+	// c 側のブロッカーは通常の Update 経路で更新されている(巻き添えなし)
+	blksC := f.Blockers(calCv)
+	require.Len(t, blksC, 1)
+	require.Equal(t, model.TimeHash(moved), blksC[0].TimeHash)
+}
+
 // 実在するブロッカーは再作成の対象にならない(余計な CreateBlocker が起きない)。
 func TestReconcile_DoesNotRecreateBlockerThatStillExists(t *testing.T) {
 	e, f := newTestEngine(t)

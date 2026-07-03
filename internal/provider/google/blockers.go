@@ -120,6 +120,8 @@ func (c *Client) CreateBlocker(ctx context.Context, cal model.CalendarRef, b mod
 }
 
 // UpdateBlocker は events.patch で start/end のみ更新する(タイトル等は送らない)。
+// 404(ブロッカーが手動削除等で消えている)は provider.ErrNotFound に写像し、
+// エンジン側が「pending 化して再作成」にフォールバックできるようにする(仕様8章4)。
 func (c *Client) UpdateBlocker(ctx context.Context, cal model.CalendarRef, eventID string, b model.Blocker) error {
 	svc, err := c.service(ctx)
 	if err != nil {
@@ -135,6 +137,10 @@ func (c *Client) UpdateBlocker(ctx context.Context, cal model.CalendarRef, event
 		return e
 	})
 	if err != nil {
+		var gerr *googleapi.Error
+		if errors.As(err, &gerr) && gerr.Code == http.StatusNotFound {
+			return fmt.Errorf("google[%s]: events.patch %s/%s: %w", c.accountID, cal, eventID, provider.ErrNotFound)
+		}
 		return fmt.Errorf("google[%s]: events.patch %s/%s: %w", c.accountID, cal, eventID, normalizeAuthErr(err))
 	}
 	return nil

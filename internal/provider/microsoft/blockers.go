@@ -136,6 +136,8 @@ func (c *Client) findBlockerByOriginTag(ctx context.Context, originTag string) (
 }
 
 // UpdateBlocker implements provider.Provider (PATCH; no transactionId).
+// A 404 (blocker deleted by hand etc.) maps to provider.ErrNotFound so the
+// engine can fall back to re-creating it (design doc 8.4).
 func (c *Client) UpdateBlocker(ctx context.Context, cal model.CalendarRef, eventID string, b model.Blocker) error {
 	payload, err := json.Marshal(blockerBody(b, ""))
 	if err != nil {
@@ -144,6 +146,9 @@ func (c *Client) UpdateBlocker(ctx context.Context, cal model.CalendarRef, event
 	status, body, err := c.doRead(ctx, http.MethodPatch, c.baseURL+"/me/events/"+url.PathEscape(eventID), payload)
 	if err != nil {
 		return err
+	}
+	if status == http.StatusNotFound {
+		return fmt.Errorf("graph update blocker %s: status 404: %w", eventID, provider.ErrNotFound)
 	}
 	if status != http.StatusOK {
 		return fmt.Errorf("graph update blocker %s: status %d: %s", eventID, status, body)

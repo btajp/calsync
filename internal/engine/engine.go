@@ -231,6 +231,14 @@ func (e *Engine) upsertBlockers(ctx context.Context, ref model.CalendarRef, ev m
 				return err
 			}
 			if err := p.UpdateBlocker(ctx, targetCal, m.BlockerEventID, b); err != nil {
+				if errors.Is(err, provider.ErrNotFound) {
+					// ブロッカーが消えている(手動削除等)→ pending 化して再作成する
+					// (createFromMapping が pending → CreateBlocker → active を行う。仕様8章4)
+					if err := e.createFromMapping(ctx, *m, ev); err != nil {
+						return err
+					}
+					continue
+				}
 				return err
 			}
 			m.TimeHash = timeHash

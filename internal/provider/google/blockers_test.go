@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/work-a-co/calsync/internal/model"
+	"github.com/work-a-co/calsync/internal/provider"
 )
 
 func decodeBody(t *testing.T, body []byte) map[string]any {
@@ -243,6 +244,24 @@ func TestUpdateBlockerPatchesTimesOnly(t *testing.T) {
 	end, ok := m["end"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "2026-07-11T04:00:00Z", end["dateTime"])
+}
+
+// 404(手動削除等でブロッカーが消えている)は provider.ErrNotFound に写像され、
+// エンジンの「pending 化して再作成」フォールバックを発動させる(仕様8章4)。
+func TestUpdateBlockerNotFoundMapsToErrNotFound(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error": {"code": 404, "message": "Not Found"}}`)
+	})
+	c := newTestClient(t, handler)
+
+	b := model.Blocker{
+		StartUTC: time.Date(2026, 7, 11, 3, 0, 0, 0, time.UTC),
+		EndUTC:   time.Date(2026, 7, 11, 4, 0, 0, 0, time.UTC),
+	}
+	err := c.UpdateBlocker(context.Background(), testRef, "ev-gone", b)
+	require.ErrorIs(t, err, provider.ErrNotFound)
 }
 
 func TestDeleteBlocker(t *testing.T) {

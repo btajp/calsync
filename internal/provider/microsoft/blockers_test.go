@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/work-a-co/calsync/internal/model"
+	"github.com/work-a-co/calsync/internal/provider"
 )
 
 const wantOriginPropID = "String {b7dbd76c-3a35-4b41-9d80-6a3f31f2a6b9} Name calsyncOrigin"
@@ -207,6 +208,25 @@ func TestUpdateBlocker(t *testing.T) {
 	require.Equal(t, "2026-07-10T03:00:00", start["dateTime"])
 	require.Equal(t, "UTC", start["timeZone"])
 	requireCommonHeaders(t, reqs)
+}
+
+// 404(手動削除等でブロッカーが消えている)は provider.ErrNotFound に写像され、
+// エンジンの「pending 化して再作成」フォールバックを発動させる(仕様8章4)。
+func TestUpdateBlockerNotFoundMapsToErrNotFound(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":{"code":"ErrorItemNotFound","message":"The specified object was not found in the store."}}`)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(handler))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL, []string{"busy"})
+	b := model.Blocker{
+		StartUTC: time.Date(2026, 7, 10, 3, 0, 0, 0, time.UTC),
+		EndUTC:   time.Date(2026, 7, 10, 4, 0, 0, 0, time.UTC),
+	}
+	err := c.UpdateBlocker(context.Background(), testCal, "ev-gone", b)
+	require.ErrorIs(t, err, provider.ErrNotFound)
 }
 
 func TestDeleteBlocker(t *testing.T) {
