@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -148,6 +149,12 @@ func Load(path string) (*Config, error) {
 		}
 		if a.ID == "" {
 			return nil, fmt.Errorf("config: accounts[%d]: id is required", i)
+		}
+		if strings.Contains(a.ID, ":") {
+			// OriginTag は "<account_id>:<event_id>" 形式で、parseOriginTag は最初の
+			// ":" で切る(engine/reconcile.go)。account id に ":" を許すと adoption が
+			// タグを誤パースし、正規ブロッカーを孤児と誤認して削除しうる。
+			return nil, fmt.Errorf("config: account %q: id must not contain %q (reserved as the origin tag separator)", a.ID, ":")
 		}
 		if seen[a.ID] {
 			return nil, fmt.Errorf("config: duplicate account id %q", a.ID)

@@ -136,6 +136,20 @@ accounts:
 			wantErr: "id is required",
 		},
 		{
+			// OriginTag は "<account_id>:<event_id>" 形式で、parseOriginTag は最初の
+			// ":" で切る(engine/reconcile.go)。account id に ":" を許すと adoption が
+			// タグを誤パースし、正規ブロッカーを孤児と誤認して削除しうる
+			// (最終ホールブランチレビュー所見3)。
+			name: "account id containing a colon is rejected",
+			yaml: `
+accounts:
+  - id: "work:primary"
+    provider: google
+    email: a@gmail.com
+`,
+			wantErr: `id must not contain ":"`,
+		},
+		{
 			name: "unsupported provider is rejected",
 			yaml: `
 accounts:
