@@ -518,6 +518,57 @@ func TestReconcile_DoesNotRecreateBlockerThatStillExists(t *testing.T) {
 	require.Len(t, f.Blockers(calBv), 1, "余計な CreateBlocker は起きない")
 }
 
+// errListBlockersBoom は failingListProvider が注入する ListBlockers の失敗。
+var errListBlockersBoom = errors.New("boom: list blockers failed")
+
+// failingListProvider は ListBlockers のみを常に失敗させるラッパー
+// (リコンサイル後半フェーズのエラー集約・続行の検証用)。
+type failingListProvider struct {
+	provider.Provider
+}
+
+func (p *failingListProvider) ListBlockers(ctx context.Context, cal model.CalendarRef, window model.Window) ([]model.BlockerRecord, error) {
+	return nil, errListBlockersBoom
+}
+
+// Reconcile 後半フェーズは 1 アカウントの障害で全体を中断しない(仕様10章。
+// 最終ホールブランチレビュー追補 Issue 6)。アカウント a の ListBlockers が
+// 失敗しても、b 上の孤児 adoption は実行され、エラーは集約されて返る。
+// 修正前は adoptOrphans が a のエラーで即 return し、b の孤児が収容されなかった。
+func TestReconcile_ListBlockersFailureDoesNotStopOtherAdoptions(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	ev := busyEvent("ev1")
+	tag := model.OriginTagOf("a", "ev1")
+
+	// origin イベントは(過去の同期で)キャッシュに生存。a の FullResync 自体は
+	// 失敗させ、upsertBlockers が孤児より先に正規ブロッカーを作らないようにする
+	require.NoError(t, e.Store.UpsertCalendar(refA))
+	require.NoError(t, e.Store.UpsertEvent(refA, ev))
+	f.FailNext(refA, provider.ErrAuthExpired)
+
+	// b 上に mappings 未登録の孤児ブロッカー
+	f.SeedBlocker(calBv, model.BlockerRecord{
+		EventID:   "orphan-b1",
+		OriginTag: tag,
+		TimeHash:  model.TimeHash(ev),
+	})
+
+	// アカウント a(Cfg.Accounts の先頭)の ListBlockers を失敗させる
+	e.Providers["a"] = &failingListProvider{Provider: f}
+
+	err := e.Reconcile(ctx)
+	require.ErrorIs(t, err, errListBlockersBoom, "a の adoption 障害は集約されて返る")
+	require.ErrorIs(t, err, provider.ErrAuthExpired, "a の resync 失敗も併せて集約される")
+
+	// b の adoption は実行されている
+	m, gerr := e.Store.GetMapping("a", "primary", "ev1", "b")
+	require.NoError(t, gerr)
+	require.NotNil(t, m, "b の孤児は a の障害に関係なく収容される")
+	require.Equal(t, store.StatusActive, m.Status)
+	require.Equal(t, "orphan-b1", m.BlockerEventID)
+}
+
 // errCreateBlockerBoom は onceFailingCreateProvider が注入する CreateBlocker の失敗。
 var errCreateBlockerBoom = errors.New("boom: create blocker failed")
 

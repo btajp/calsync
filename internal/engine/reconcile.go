@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/work-a-co/calsync/internal/config"
 	"github.com/work-a-co/calsync/internal/model"
+	"github.com/work-a-co/calsync/internal/provider"
 	"github.com/work-a-co/calsync/internal/store"
 )
 
@@ -144,28 +146,32 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 // 同一冪等キーで CreateBlocker を再実行する — 既に作成済みなら既存 ID が返るため、
 // 実在確認と収容を兼ねる。origin が消えていれば intent ごと破棄する
 // (ブロッカーが作られてしまっていた場合は直後の adoption が掃除する)。
+// 1 行の失敗で残りを止めず、エラーは行単位で集約して返す(仕様10章。
+// 最終ホールブランチレビュー追補 Issue 6)。
 func (e *Engine) resolvePending(ctx context.Context) error {
 	pend, err := e.Store.ListPendingMappings()
 	if err != nil {
 		return err
 	}
+	var errs []error
 	for _, m := range pend {
 		originRef := model.CalendarRef{AccountID: m.OriginAccount, CalendarID: m.OriginCalendar}
 		ev, err := e.Store.GetEvent(originRef, m.OriginEventID)
 		if err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
 		if ev == nil {
 			if err := e.Store.DeleteMapping(m.OriginAccount, m.OriginCalendar, m.OriginEventID, m.TargetAccount); err != nil {
-				return err
+				errs = append(errs, err)
 			}
 			continue
 		}
 		if err := e.createFromMapping(ctx, m, *ev); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // adoptOrphans は各アカウントのブロッカー書き込み先を ListBlockers(タグ検索)で
@@ -173,71 +179,75 @@ func (e *Engine) resolvePending(ctx context.Context) error {
 // origin の実在に応じて収容 or 削除する(仕様8章 3)。DB 全損時の mappings 再構築も
 // この経路で行われる(仕様8章 5)。origin の実在は直前の FullResync で最新化された
 // events キャッシュで判定する。
+// 1 アカウント/1 ブロッカーの失敗で残りを止めず、エラーは集約して返す(仕様10章。
+// 最終ホールブランチレビュー追補 Issue 6)。
 func (e *Engine) adoptOrphans(ctx context.Context) error {
 	w := e.currentWindow()
+	var errs []error
 	for _, acct := range e.Cfg.Accounts {
 		ref := model.CalendarRef{AccountID: acct.ID, CalendarID: acct.BlockerCalendar}
 		p, err := e.providerFor(acct.ID)
 		if err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("account %s: %w", acct.ID, err))
+			continue
 		}
 		recs, err := p.ListBlockers(ctx, ref, w)
 		if err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("list blockers %s: %w", ref, err))
+			continue
 		}
 		for _, rec := range recs {
-			known, err := e.Store.IsBlocker(acct.ID, rec.EventID)
-			if err != nil {
-				return err
-			}
-			if known {
-				continue // mappings 登録済みの正規ブロッカー
-			}
-			originAcct, originEventID, ok := parseOriginTag(rec.OriginTag)
-			if !ok {
-				continue // タグ形式不正。calsync 製と断定できないため触らない
-			}
-			ev, originCal, err := e.findCachedOriginEvent(originAcct, originEventID)
-			if err != nil {
-				return err
-			}
-			if ev == nil {
-				// origin 消滅(またはアカウントが監視対象外)→ 掃除
-				if err := p.DeleteBlocker(ctx, ref, rec.EventID); err != nil {
-					return err
-				}
-				continue
-			}
-			existing, err := e.Store.GetMapping(originAcct, originCal, originEventID, acct.ID)
-			if err != nil {
-				return err
-			}
-			if existing != nil && existing.BlockerEventID != rec.EventID {
-				// 同じ origin/target 対に別のブロッカー(または suppressed/pending の意図)が
-				// 既に紐づいている → この孤児は重複。掃除
-				if err := p.DeleteBlocker(ctx, ref, rec.EventID); err != nil {
-					return err
-				}
-				continue
-			}
-			// origin 生存 → active として収容(削除・再作成はしない)
-			m := store.Mapping{
-				OriginAccount:  originAcct,
-				OriginCalendar: originCal,
-				OriginEventID:  originEventID,
-				TargetAccount:  acct.ID,
-				TargetCalendar: acct.BlockerCalendar,
-				BlockerEventID: rec.EventID,
-				IdempotencyKey: idemKeyFor(acct.Provider, rec.OriginTag, acct.ID),
-				TimeHash:       rec.TimeHash,
-				Status:         store.StatusActive,
-			}
-			if err := e.Store.PutMapping(m); err != nil {
-				return err
+			if err := e.adoptOrphan(ctx, p, acct, ref, rec); err != nil {
+				errs = append(errs, fmt.Errorf("adopt %s on %s: %w", rec.EventID, ref, err))
 			}
 		}
 	}
-	return nil
+	return errors.Join(errs...)
+}
+
+// adoptOrphan は 1 ブロッカー分の孤児判定・収容・掃除を行う(adoptOrphans の 1 反復)。
+func (e *Engine) adoptOrphan(ctx context.Context, p provider.Provider, acct config.Account, ref model.CalendarRef, rec model.BlockerRecord) error {
+	known, err := e.Store.IsBlocker(acct.ID, rec.EventID)
+	if err != nil {
+		return err
+	}
+	if known {
+		return nil // mappings 登録済みの正規ブロッカー
+	}
+	originAcct, originEventID, ok := parseOriginTag(rec.OriginTag)
+	if !ok {
+		return nil // タグ形式不正。calsync 製と断定できないため触らない
+	}
+	ev, originCal, err := e.findCachedOriginEvent(originAcct, originEventID)
+	if err != nil {
+		return err
+	}
+	if ev == nil {
+		// origin 消滅(またはアカウントが監視対象外)→ 掃除
+		return p.DeleteBlocker(ctx, ref, rec.EventID)
+	}
+	existing, err := e.Store.GetMapping(originAcct, originCal, originEventID, acct.ID)
+	if err != nil {
+		return err
+	}
+	if existing != nil && existing.BlockerEventID != rec.EventID {
+		// 同じ origin/target 対に別のブロッカー(または suppressed/pending の意図)が
+		// 既に紐づいている → この孤児は重複。掃除
+		return p.DeleteBlocker(ctx, ref, rec.EventID)
+	}
+	// origin 生存 → active として収容(削除・再作成はしない)
+	m := store.Mapping{
+		OriginAccount:  originAcct,
+		OriginCalendar: originCal,
+		OriginEventID:  originEventID,
+		TargetAccount:  acct.ID,
+		TargetCalendar: acct.BlockerCalendar,
+		BlockerEventID: rec.EventID,
+		IdempotencyKey: idemKeyFor(acct.Provider, rec.OriginTag, acct.ID),
+		TimeHash:       rec.TimeHash,
+		Status:         store.StatusActive,
+	}
+	return e.Store.PutMapping(m)
 }
 
 // restoreMissingBlockers は「手で消されたブロッカーの再作成」を行う(仕様8章4:
@@ -254,17 +264,21 @@ func (e *Engine) adoptOrphans(ctx context.Context) error {
 // 実プロバイダでは決定的な冪等キーでの再送が 409 → cancelled 蘇生の経路を通るため
 // (修正1)、fake のようにキーを解放して新規作成になる意味論・実プロバイダのように
 // 蘇生になる意味論のどちらでも成立する。
+// 1 アカウント/1 行の失敗で残りを止めず、エラーは集約して返す(仕様10章)。
 func (e *Engine) restoreMissingBlockers(ctx context.Context) error {
 	w := e.currentWindow()
+	var errs []error
 	for _, acct := range e.Cfg.Accounts {
 		ref := model.CalendarRef{AccountID: acct.ID, CalendarID: acct.BlockerCalendar}
 		p, err := e.providerFor(acct.ID)
 		if err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("account %s: %w", acct.ID, err))
+			continue
 		}
 		recs, err := p.ListBlockers(ctx, ref, w)
 		if err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("list blockers %s: %w", ref, err))
+			continue
 		}
 		existing := make(map[string]bool, len(recs))
 		for _, rec := range recs {
@@ -273,7 +287,8 @@ func (e *Engine) restoreMissingBlockers(ctx context.Context) error {
 
 		maps, err := e.Store.ListMappingsWhereTargetAccount(acct.ID)
 		if err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
 		for _, m := range maps {
 			if m.Status != store.StatusActive || existing[m.BlockerEventID] {
@@ -282,27 +297,31 @@ func (e *Engine) restoreMissingBlockers(ctx context.Context) error {
 			originRef := model.CalendarRef{AccountID: m.OriginAccount, CalendarID: m.OriginCalendar}
 			ev, err := e.Store.GetEvent(originRef, m.OriginEventID)
 			if err != nil {
-				return err
+				errs = append(errs, err)
+				continue
 			}
 			if ev == nil {
 				continue // origin がキャッシュに無い → 次回 FullResync が整合を回復する
 			}
 			if err := e.createFromMapping(ctx, m, *ev); err != nil {
-				return err
+				errs = append(errs, err)
 			}
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // reevaluateSuppressed は suppressed mappings を再評価する(仕様6.5)。
 // 抑止理由だった重複実予定が消えていれば昇格し、origin 自体が消えていれば行を掃除する。
 // 削除通知経由の promoteSuppressed(Task 9)を取り逃がした場合のセーフティネット。
+// 1 アカウント/1 行の失敗で残りを止めず、エラーは集約して返す(仕様10章)。
 func (e *Engine) reevaluateSuppressed(ctx context.Context) error {
+	var errs []error
 	for _, acct := range e.Cfg.Accounts {
 		maps, err := e.Store.ListMappingsWhereTargetAccount(acct.ID)
 		if err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
 		for _, m := range maps {
 			if m.Status != store.StatusSuppressed {
@@ -311,12 +330,13 @@ func (e *Engine) reevaluateSuppressed(ctx context.Context) error {
 			originRef := model.CalendarRef{AccountID: m.OriginAccount, CalendarID: m.OriginCalendar}
 			ev, err := e.Store.GetEvent(originRef, m.OriginEventID)
 			if err != nil {
-				return err
+				errs = append(errs, err)
+				continue
 			}
 			if ev == nil {
 				// origin 消滅 → suppressed 行を掃除(ブロッカーは元々存在しない)
 				if err := e.Store.DeleteMapping(m.OriginAccount, m.OriginCalendar, m.OriginEventID, m.TargetAccount); err != nil {
-					return err
+					errs = append(errs, err)
 				}
 				continue
 			}
@@ -326,17 +346,18 @@ func (e *Engine) reevaluateSuppressed(ctx context.Context) error {
 			}
 			dup, err := e.isDuplicateOnTarget(*target, *ev)
 			if err != nil {
-				return err
+				errs = append(errs, err)
+				continue
 			}
 			if dup {
 				continue // 重複実予定が健在 → 抑止継続
 			}
 			if err := e.createFromMapping(ctx, m, *ev); err != nil {
-				return err
+				errs = append(errs, err)
 			}
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // parseOriginTag は "<origin_account_id>:<origin_event_id>" を分解する。
