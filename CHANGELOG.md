@@ -8,6 +8,8 @@
 
 ### Added
 
+- **ブロッカーの元アカウント表示(per-account オプトイン、#7)**: `accounts[].show_origin_in_description: true` で、そのアカウントのカレンダーに作られるブロッカーの説明欄に元アカウントの ID を記載(Google: description / Microsoft: body)。既定は従来どおり完全匿名。変更検出ハッシュにポリシー成分を合成しているため、トグルの ON/OFF は次回リコンサイルで既存ブロッカーにも遡及反映される
+
 - **相互 Busy ブロッカー同期エンジン**: 複数の Google カレンダー / Microsoft 365(個人 Microsoft アカウント含む)を差分ポーリング(Google: syncToken / Graph: calendarView delta)で監視し、Busy 予定を他の全アカウントへ「予定あり」ブロッカーとしてミラーする Hub & Spoke 構成
 - **無限ループ防止**: ローカル mappings テーブルによる一次判定+イベント拡張プロパティタグ(`calsync-origin`)による二次判定・自己修復
 - **冪等なブロッカー作成**: Google はクライアント生成イベント ID、Microsoft は `transactionId` による二重作成防止(クラッシュ・再送に安全)

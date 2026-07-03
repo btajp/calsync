@@ -46,6 +46,7 @@ func blockerEnd(b model.Blocker) *calendar.EventDateTime {
 func blockerEventBody(b model.Blocker) *calendar.Event {
 	return &calendar.Event{
 		Summary:      b.Title,
+		Description:  b.Description,
 		Transparency: "opaque",
 		Visibility:   "private",
 		Start:        blockerStart(b),
@@ -132,8 +133,12 @@ func (c *Client) UpdateBlocker(ctx context.Context, cal model.CalendarRef, event
 		return err
 	}
 	patch := &calendar.Event{
-		Start: blockerStart(b),
-		End:   blockerEnd(b),
+		Start:       blockerStart(b),
+		End:         blockerEnd(b),
+		Description: b.Description,
+		// 空文字でのクリア(show_origin_in_description のトグル OFF)も
+		// 反映するため、Description は常に明示送信する(Issue #7)
+		ForceSendFields: []string{"Description"},
 	}
 	call := svc.Events.Patch(cal.CalendarID, eventID, patch).Context(ctx)
 	err = c.doWithRetry(ctx, func() error {

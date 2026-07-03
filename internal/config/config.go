@@ -34,6 +34,10 @@ type Account struct {
 	ID, Provider, Email string   // Provider は "google" | "microsoft"
 	Calendars           []string // 既定 ["primary"]。microsoft は ["primary"] 以外エラー(v1制約)
 	BlockerCalendar     string   // 既定 "primary"
+	// ShowOriginInDescription: true のとき、このアカウントのカレンダーに作成される
+	// ブロッカーの説明欄に元アカウントの ID(YAML の id。メールアドレスは含めない)を
+	// 記載する。既定 false(完全匿名)。トグル変更は次回リコンサイルで既存分にも遡及する。
+	ShowOriginInDescription bool `yaml:"show_origin_in_description"`
 }
 
 // rawConfig は YAML の生の形。KnownFields(true) の照合対象になるため、
@@ -63,11 +67,12 @@ type rawMicrosoftProvider struct {
 }
 
 type rawAccount struct {
-	ID              string   `yaml:"id"`
-	Provider        string   `yaml:"provider"`
-	Email           string   `yaml:"email"`
-	Calendars       []string `yaml:"calendars"`
-	BlockerCalendar string   `yaml:"blocker_calendar"`
+	ID                      string   `yaml:"id"`
+	Provider                string   `yaml:"provider"`
+	Email                   string   `yaml:"email"`
+	Calendars               []string `yaml:"calendars"`
+	BlockerCalendar         string   `yaml:"blocker_calendar"`
+	ShowOriginInDescription bool     `yaml:"show_origin_in_description"`
 }
 
 var syncWindowRe = regexp.MustCompile(`^([0-9]+)(mo|d)$`)
@@ -157,11 +162,12 @@ func Load(path string) (*Config, error) {
 	seen := make(map[string]bool, len(raw.Accounts))
 	for i, ra := range raw.Accounts {
 		a := Account{
-			ID:              ra.ID,
-			Provider:        ra.Provider,
-			Email:           ra.Email,
-			Calendars:       ra.Calendars,
-			BlockerCalendar: ra.BlockerCalendar,
+			ID:                      ra.ID,
+			Provider:                ra.Provider,
+			Email:                   ra.Email,
+			Calendars:               ra.Calendars,
+			BlockerCalendar:         ra.BlockerCalendar,
+			ShowOriginInDescription: ra.ShowOriginInDescription,
 		}
 		if a.ID == "" {
 			return nil, fmt.Errorf("config: accounts[%d]: id is required", i)

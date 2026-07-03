@@ -546,3 +546,73 @@ func TestProcessEvent_UnchangedMakesNoProviderCalls(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, store.StatusActive, m.Status)
 }
+
+// ---- Issue #7: ブロッカーの元アカウント表示(per-target オプトイン) ----
+
+// enableOriginDescription はテスト用に target アカウントのフラグを切り替える。
+func enableOriginDescription(e *Engine, accountID string, on bool) {
+	for i := range e.Cfg.Accounts {
+		if e.Cfg.Accounts[i].ID == accountID {
+			e.Cfg.Accounts[i].ShowOriginInDescription = on
+		}
+	}
+}
+
+func TestUpsertBlockers_OriginDescriptionPerTarget(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	enableOriginDescription(e, "c", true) // c だけオプトイン
+
+	f.SetFullState(refA, []model.NormalizedEvent{busyEvent("ev1")})
+	require.NoError(t, e.SyncCalendar(ctx, refA))
+
+	// c: description に元アカウント ID が入る
+	blksC := f.Blockers(calCv)
+	require.Len(t, blksC, 1)
+	bc, ok := f.StoredBlocker(calCv, blksC[0].EventID)
+	require.True(t, ok)
+	require.Contains(t, bc.Description, "a", "オプトインした c には origin ID 入り description")
+	require.Contains(t, bc.Description, "calsync")
+
+	// b: 既定オフ → description は空(従来どおり完全匿名)
+	blksB := f.Blockers(calBv)
+	require.Len(t, blksB, 1)
+	bb, ok := f.StoredBlocker(calBv, blksB[0].EventID)
+	require.True(t, ok)
+	require.Empty(t, bb.Description)
+
+	// mappings のハッシュ: c はポリシー込み、b は素の TimeHash
+	mc, err := e.Store.GetMapping("a", "primary", "ev1", "c")
+	require.NoError(t, err)
+	require.NotEqual(t, model.TimeHash(busyEvent("ev1")), mc.TimeHash, "c のハッシュにはポリシー成分が入る")
+	mb, err := e.Store.GetMapping("a", "primary", "ev1", "b")
+	require.NoError(t, err)
+	require.Equal(t, model.TimeHash(busyEvent("ev1")), mb.TimeHash, "既定オフのハッシュは従来と同一(移行無風)")
+}
+
+func TestFullResync_AppliesDescriptionPolicyRetroactively(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+
+	// フラグ OFF で作成(既存運用状態)
+	f.SetFullState(refA, []model.NormalizedEvent{busyEvent("ev1")})
+	require.NoError(t, e.SyncCalendar(ctx, refA))
+	blks := f.Blockers(calCv)
+	require.Len(t, blks, 1)
+	b0, _ := f.StoredBlocker(calCv, blks[0].EventID)
+	require.Empty(t, b0.Description)
+
+	// ON に切り替え → リコンサイル(FullResync)で既存ブロッカーに遡及反映
+	enableOriginDescription(e, "c", true)
+	require.NoError(t, e.FullResync(ctx, refA))
+	b1, ok := f.StoredBlocker(calCv, blks[0].EventID)
+	require.True(t, ok)
+	require.Contains(t, b1.Description, "calsync", "トグル ON は次のリコンサイルで既存分に反映される")
+
+	// OFF に戻す → description も消える
+	enableOriginDescription(e, "c", false)
+	require.NoError(t, e.FullResync(ctx, refA))
+	b2, ok := f.StoredBlocker(calCv, blks[0].EventID)
+	require.True(t, ok)
+	require.Empty(t, b2.Description, "トグル OFF で description はクリアされる")
+}

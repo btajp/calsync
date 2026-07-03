@@ -258,7 +258,7 @@ func (e *Engine) rebuildMappingsFromTags(ctx context.Context) error {
 				TargetCalendar: acct.BlockerCalendar,
 				BlockerEventID: rec.EventID,
 				IdempotencyKey: idemKeyFor(acct.Provider, rec.OriginTag, acct.ID),
-				TimeHash:       rec.TimeHash,
+				TimeHash:       e.policyHashFor(rec.TimeHash, acct.ID),
 				Status:         store.StatusActive,
 			}
 			if err := e.Store.PutMapping(m); err != nil {
@@ -382,7 +382,7 @@ func (e *Engine) adoptOrphan(ctx context.Context, p provider.Provider, acct conf
 		TargetCalendar: acct.BlockerCalendar,
 		BlockerEventID: rec.EventID,
 		IdempotencyKey: idemKeyFor(acct.Provider, rec.OriginTag, acct.ID),
-		TimeHash:       rec.TimeHash,
+		TimeHash:       e.policyHashFor(rec.TimeHash, acct.ID),
 		Status:         store.StatusActive,
 	}
 	return e.Store.PutMapping(m)
