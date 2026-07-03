@@ -310,3 +310,78 @@ func (e *Engine) targetTimezone(ctx context.Context, cal model.CalendarRef, p pr
 	}
 	return tz, nil
 }
+
+// TokenDeleter は RemoveAccount がトークンファイルを消すための最小インター
+// フェース。auth.TokenStore が満たす(engine→auth の依存を作らないためにここで定義)。
+type TokenDeleter interface {
+	Delete(accountID string) error
+}
+
+// RemoveAccount はアカウントを完全に削除する(仕様 11 章 accounts remove)。処理順:
+//  1. このアカウント発のブロッカーを全ターゲットのカレンダーから削除(+mappings 行削除)
+//  2. このアカウントに置かれた受領ブロッカーを削除(+mappings 行削除)
+//  3. events / calendars / トークンのローカル状態を削除
+//
+// force=true の場合、プロバイダ不在(認証切れで構築不能)や DeleteBlocker の失敗を
+// スキップして続行する(リモートにブロッカーが残りうることは呼び出し側が警告する)。
+// force=false でエラー中断しても、mappings 行は API 削除成功後にのみ消しているため
+// 再実行すれば続きから冪等に完了できる。
+func RemoveAccount(ctx context.Context, e *Engine, tokens TokenDeleter, accountID string, force bool) error {
+	deleteRemote := func(targetAccount, targetCalendar, eventID string) error {
+		if eventID == "" {
+			return nil // pending / suppressed はリモートに実体がない
+		}
+		p, ok := e.Providers[targetAccount]
+		if !ok {
+			if force {
+				return nil
+			}
+			return fmt.Errorf("account %s: provider unavailable; re-authenticate it or pass --force to skip remote deletion", targetAccount)
+		}
+		cal := model.CalendarRef{AccountID: targetAccount, CalendarID: targetCalendar}
+		if err := p.DeleteBlocker(ctx, cal, eventID); err != nil {
+			if force {
+				return nil
+			}
+			return fmt.Errorf("delete blocker %s on %s (pass --force to skip): %w", eventID, cal, err)
+		}
+		return nil
+	}
+
+	// (1) 配布済みブロッカー(このアカウントが origin)
+	origins, err := e.Store.ListMappingsWhereOriginAccount(accountID)
+	if err != nil {
+		return err
+	}
+	for _, m := range origins {
+		if err := deleteRemote(m.TargetAccount, m.TargetCalendar, m.BlockerEventID); err != nil {
+			return err
+		}
+		if err := e.Store.DeleteMapping(m.OriginAccount, m.OriginCalendar, m.OriginEventID, m.TargetAccount); err != nil {
+			return err
+		}
+	}
+
+	// (2) 受領ブロッカー(このアカウントが target。m.TargetAccount == accountID)
+	received, err := e.Store.ListMappingsWhereTargetAccount(accountID)
+	if err != nil {
+		return err
+	}
+	for _, m := range received {
+		if err := deleteRemote(m.TargetAccount, m.TargetCalendar, m.BlockerEventID); err != nil {
+			return err
+		}
+		if err := e.Store.DeleteMapping(m.OriginAccount, m.OriginCalendar, m.OriginEventID, m.TargetAccount); err != nil {
+			return err
+		}
+	}
+
+	// (3) ローカル状態
+	if err := e.Store.DeleteEventsForAccount(accountID); err != nil {
+		return err
+	}
+	if err := e.Store.DeleteCalendarsForAccount(accountID); err != nil {
+		return err
+	}
+	return tokens.Delete(accountID)
+}
