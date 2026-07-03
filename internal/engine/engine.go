@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -48,8 +49,8 @@ func idemKeyFor(providerName, originTag, targetAccountID string) string {
 // SyncCalendar は 1 カレンダー分の差分を取得し、各イベントを processEvent へ流す。
 // カーソルは Changes が完走した(newCursor 非空)場合のみ永続化する(仕様5.1)。
 // 途中失敗時は旧カーソルのまま再実行される(全処理が冪等なので安全)。
-// NOTE: ErrCursorInvalid → FullResync の配線は Task 10(reconcile.go)で行う。
-// それまでは他のエラー(ErrAuthExpired 等)と同様にそのまま返す。
+// カーソル失効(Google 410 / Graph 410・syncStateNotFound 系)は provider が
+// ErrCursorInvalid に正規化して返し、ここで即時 FullResync に切り替えて自己修復する(仕様8章)。
 func (e *Engine) SyncCalendar(ctx context.Context, ref model.CalendarRef) error {
 	if err := e.Store.UpsertCalendar(ref); err != nil {
 		return err
@@ -68,6 +69,9 @@ func (e *Engine) SyncCalendar(ctx context.Context, ref model.CalendarRef) error 
 		return err
 	}
 	events, newCursor, err := p.Changes(ctx, ref, cursor, w)
+	if errors.Is(err, provider.ErrCursorInvalid) {
+		return e.FullResync(ctx, ref)
+	}
 	if err != nil {
 		return err
 	}
