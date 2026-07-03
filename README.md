@@ -53,7 +53,7 @@ flowchart LR
 2. [Entra 管理センター](https://entra.microsoft.com) → App registrations → New registration:
    - Supported account types: **「Accounts in any organizational directory and personal Microsoft accounts」**を選択(signInAudience=AzureADandPersonalMicrosoftAccount)。calsync は `/common` エンドポイントで認証します
 3. Authentication → Add a platform → **「Mobile and desktop applications」**を選び、Redirect URI に **`http://localhost`** を追加します(localhost はポート番号がマッチング時に無視されるため、ポート指定は不要です)
-4. 同じ Authentication ページの Advanced settings で **「Allow public client flows」を Yes** にします。**これを忘れると認可時に `AADSTS7000218` エラーになります**
+4. 「認証」ページで **「パブリック クライアント フローを許可する(Allow public client flows)」を有効** にします。新 UI(Authentication (Preview))では **「設定」タブ**、旧 UI では「Advanced settings」の中にあります。**これを忘れると Device Code フロー使用時に `AADSTS7000218` エラーになります**
 5. API permissions → Add a permission → Microsoft Graph → Delegated permissions で **`Calendars.ReadWrite`** と **`MailboxSettings.Read`**(終日ブロッカー作成に使うメールボックスのタイムゾーン取得に必要)を追加します(`offline_access` は calsync が要求スコープに含めます)。既定では管理者同意は不要ですが、組織でユーザー同意が無効化されている場合は `AADSTS65001` または `AADSTS90094` が出ます。その場合は管理者に API permissions ページの **「Grant admin consent for <テナント名>」** を押してもらってください
 6. Overview の **Application (client) ID** を `providers.microsoft.client_id` に設定します
 
