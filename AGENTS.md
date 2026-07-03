@@ -34,7 +34,7 @@ docker compose config -q             # compose 構文チェック
 ## 壊してはいけない不変条件
 
 1. **ループ防止**: mappings テーブルが一次判定、拡張プロパティタグは二次(リカバリ用)。削除通知は id しか持たないためタグに依存した削除判定は不可
-2. **カーソル規律**: 差分取得を完走したときだけカーソルを永続化。カーソル失効(Google 410 / Graph 410・syncStateNotFound)時も **mappings は絶対にワイプしない**(カーソルとイベントキャッシュのみ破棄 → set-difference で自己修復)
+2. **カーソル規律**: 差分取得を完走したときだけカーソルを永続化。カーソル失効(Google 410 / Graph 410・syncStateNotFound)時も **mappings は絶対にワイプしない**(カーソルとイベントキャッシュのみ破棄 → set-difference で自己修復)。加えて同一カレンダーが5回連続で同期失敗したらカーソル毒化とみなし FullResync で再初期化する(Graph は毒された deltaLink に 410 ではなく持続 5xx を返すことがある — 実測済み)
 3. **冪等作成**: ブロッカー作成は必ず冪等キー(Google: クライアント生成 ID / Graph: transactionId)+ mappings の pending→active 遷移を経る
 4. **Graph の作法**: 全リクエストに `Prefer: IdType="ImmutableId"`、`odata.maxpagesize` 禁止、OData クエリの空白は `%20`(`+` は拒否される)
 5. **OAuth リダイレクト**: Microsoft は「localhost・パスなし」形式必須(MSA はポートを無視するがパスを照合)。認可 URL には `prompt=select_account` を必ず付ける(同意済みセッションの無言再発行で別アカウントのトークンが保存された実績あり)
