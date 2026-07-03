@@ -435,8 +435,11 @@ func (p *onceFailingCreateProvider) CreateBlocker(ctx context.Context, cal model
 }
 
 // pending 解決: CreateBlocker が失敗した場合、mapping は pending のまま残り
-// (active に遷移しない)、ブロッカーも作られない。障害が解消すれば次回 Reconcile で
-// 再解決される(intent-first の再実行安全性。仕様6.4)。
+// (active に遷移しない)、ブロッカーも作られない。障害が解消すれば次回 Reconcile の
+// resolvePending で再解決される(intent-first の再実行安全性。仕様6.4)。
+// a の FullResync は両呼び出しとも FailNext で失敗させ、upsertBlockers 側が
+// 同じ mapping を先取りして処理しないようにする(origin イベントは直接キャッシュに
+// 置く)ことで、CreateBlocker の成否が resolvePending 単独の効果として観測できるようにする。
 func TestReconcile_PendingStaysPendingWhenCreateBlockerFails(t *testing.T) {
 	e, f := newTestEngine(t)
 	ctx := context.Background()
@@ -444,22 +447,27 @@ func TestReconcile_PendingStaysPendingWhenCreateBlockerFails(t *testing.T) {
 	tag := model.OriginTagOf("a", "ev1")
 	idem := model.MSTransactionID(tag, "b")
 
-	// クラッシュ跡の再現: pending 行のみ存在し、ブロッカーはまだ作られていない
+	// クラッシュ跡の再現: pending 行のみ存在し、ブロッカーはまだ作られていない。
+	// origin イベントは(過去の同期で)events キャッシュに残っている
+	require.NoError(t, e.Store.UpsertCalendar(refA))
+	require.NoError(t, e.Store.UpsertEvent(refA, ev))
 	require.NoError(t, e.Store.PutMapping(store.Mapping{
 		OriginAccount: "a", OriginCalendar: "primary", OriginEventID: "ev1",
 		TargetAccount: "b", TargetCalendar: "primary",
 		IdempotencyKey: idem, TimeHash: model.TimeHash(ev),
 		Status: store.StatusPending, // BlockerEventID は空のまま
 	}))
-	// origin は生きている(今回のフル同期にも現れる → events キャッシュにも載る)
-	f.SetFullState(refA, []model.NormalizedEvent{ev})
 
 	// b への CreateBlocker だけを失敗させる
 	fp := &onceFailingCreateProvider{Provider: f, fail: true}
 	e.Providers["b"] = fp
+	// a の FullResync 自体は失敗させ、upsertBlockers がこの pending 行を
+	// 先取り解決しないようにする
+	f.FailNext(refA, provider.ErrAuthExpired)
 
 	err := e.Reconcile(ctx)
 	require.Error(t, err)
+	require.ErrorIs(t, err, provider.ErrAuthExpired)
 	require.ErrorIs(t, err, errCreateBlockerBoom)
 
 	m, gerr := e.Store.GetMapping("a", "primary", "ev1", "b")
@@ -469,14 +477,17 @@ func TestReconcile_PendingStaysPendingWhenCreateBlockerFails(t *testing.T) {
 	require.Empty(t, m.BlockerEventID)
 	require.Empty(t, f.Blockers(calBv))
 
-	// 障害解消後: 次回 Reconcile で再解決される(二重作成なし・同一冪等キー)
+	// 障害解消後: 次回 Reconcile の resolvePending が同一冪等キーで再解決する
+	// (a の FullResync 自体は今回も失敗させ、resolvePending 単独の効果を見る)
 	fp.fail = false
-	require.NoError(t, e.Reconcile(ctx))
+	f.FailNext(refA, provider.ErrAuthExpired)
+	err = e.Reconcile(ctx)
+	require.ErrorIs(t, err, provider.ErrAuthExpired) // a の resync 失敗は残る
 
 	m2, gerr := e.Store.GetMapping("a", "primary", "ev1", "b")
 	require.NoError(t, gerr)
 	require.NotNil(t, m2)
-	require.Equal(t, store.StatusActive, m2.Status)
+	require.Equal(t, store.StatusActive, m2.Status) // resolvePending は解決している
 	require.NotEmpty(t, m2.BlockerEventID)
 	require.Len(t, f.Blockers(calBv), 1)
 }
