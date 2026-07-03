@@ -1,0 +1,180 @@
+package google
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"time"
+
+	calendar "google.golang.org/api/calendar/v3"
+	"google.golang.org/api/googleapi"
+
+	"github.com/work-a-co/calsync/internal/model"
+	"github.com/work-a-co/calsync/internal/provider"
+)
+
+// Provider の全メソッドが揃う本ファイルで、コンパイル時に実装を保証する。
+var _ provider.Provider = (*Client)(nil)
+
+// blockerStart / blockerEnd: 時刻指定は dateTime(UTC 固定)、
+// 終日は date に現地日付をそのまま入れる(end は排他的。仕様書6.6)。
+func blockerStart(b model.Blocker) *calendar.EventDateTime {
+	if b.IsAllDay {
+		return &calendar.EventDateTime{Date: b.AllDayStart}
+	}
+	return &calendar.EventDateTime{
+		DateTime: b.StartUTC.UTC().Format(time.RFC3339),
+		TimeZone: "UTC",
+	}
+}
+
+func blockerEnd(b model.Blocker) *calendar.EventDateTime {
+	if b.IsAllDay {
+		return &calendar.EventDateTime{Date: b.AllDayEnd}
+	}
+	return &calendar.EventDateTime{
+		DateTime: b.EndUTC.UTC().Format(time.RFC3339),
+		TimeZone: "UTC",
+	}
+}
+
+// CreateBlocker は idemKey をクライアント生成イベント ID として events.insert する
+// (冪等作成。仕様書6.4)。409(ID 衝突)は「同一冪等キーで作成済み」を意味するため、
+// events.get で実在確認してその ID を返し、エラーにしない(収容)。
+func (c *Client) CreateBlocker(ctx context.Context, cal model.CalendarRef, b model.Blocker, idemKey string) (string, error) {
+	svc, err := c.service(ctx)
+	if err != nil {
+		return "", err
+	}
+	body := &calendar.Event{
+		Id:           idemKey,
+		Summary:      b.Title,
+		Transparency: "opaque",
+		Visibility:   "private",
+		Start:        blockerStart(b),
+		End:          blockerEnd(b),
+		Reminders: &calendar.EventReminders{
+			UseDefault: false,
+			// ゼロ値の false は omitempty で消えるため明示送信する
+			ForceSendFields: []string{"UseDefault"},
+		},
+		ExtendedProperties: &calendar.EventExtendedProperties{
+			Private: map[string]string{
+				"calsync":        "v1",
+				"calsync-origin": b.OriginTag,
+			},
+		},
+	}
+	insert := svc.Events.Insert(cal.CalendarID, body).Context(ctx)
+	var created *calendar.Event
+	err = c.doWithRetry(ctx, func() error {
+		var e error
+		created, e = insert.Do()
+		return e
+	})
+	if err == nil {
+		return created.Id, nil
+	}
+	var gerr *googleapi.Error
+	if errors.As(err, &gerr) && gerr.Code == http.StatusConflict {
+		get := svc.Events.Get(cal.CalendarID, idemKey).Context(ctx)
+		var existing *calendar.Event
+		if err := c.doWithRetry(ctx, func() error {
+			var e error
+			existing, e = get.Do()
+			return e
+		}); err != nil {
+			return "", fmt.Errorf("google[%s]: confirm existing blocker %s: %w", c.accountID, idemKey, normalizeAuthErr(err))
+		}
+		return existing.Id, nil
+	}
+	return "", fmt.Errorf("google[%s]: events.insert %s: %w", c.accountID, cal, normalizeAuthErr(err))
+}
+
+// UpdateBlocker は events.patch で start/end のみ更新する(タイトル等は送らない)。
+func (c *Client) UpdateBlocker(ctx context.Context, cal model.CalendarRef, eventID string, b model.Blocker) error {
+	svc, err := c.service(ctx)
+	if err != nil {
+		return err
+	}
+	patch := &calendar.Event{
+		Start: blockerStart(b),
+		End:   blockerEnd(b),
+	}
+	call := svc.Events.Patch(cal.CalendarID, eventID, patch).Context(ctx)
+	err = c.doWithRetry(ctx, func() error {
+		_, e := call.Do()
+		return e
+	})
+	if err != nil {
+		return fmt.Errorf("google[%s]: events.patch %s/%s: %w", c.accountID, cal, eventID, normalizeAuthErr(err))
+	}
+	return nil
+}
+
+// DeleteBlocker は events.delete を実行する。404(存在しない)・410(削除済み)は
+// 成功扱いで nil を返す(冪等削除。コントラクト: 404 は成功扱い)。
+func (c *Client) DeleteBlocker(ctx context.Context, cal model.CalendarRef, eventID string) error {
+	svc, err := c.service(ctx)
+	if err != nil {
+		return err
+	}
+	call := svc.Events.Delete(cal.CalendarID, eventID).Context(ctx)
+	err = c.doWithRetry(ctx, func() error { return call.Do() })
+	if err != nil {
+		var gerr *googleapi.Error
+		if errors.As(err, &gerr) && (gerr.Code == http.StatusNotFound || gerr.Code == http.StatusGone) {
+			return nil
+		}
+		return fmt.Errorf("google[%s]: events.delete %s/%s: %w", c.accountID, cal, eventID, normalizeAuthErr(err))
+	}
+	return nil
+}
+
+// ListBlockers は calsync タグ付きイベントを privateExtendedProperty で列挙する。
+// privateExtendedProperty は syncToken と併用できないためリコンサイル専用(仕様書4章)。
+// TimeHash は normalizeEvent の結果(終日/時刻指定を吸収済み)に model.TimeHash を適用する。
+func (c *Client) ListBlockers(ctx context.Context, cal model.CalendarRef, window model.Window) ([]model.BlockerRecord, error) {
+	svc, err := c.service(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var (
+		records   []model.BlockerRecord
+		pageToken string
+	)
+	for {
+		call := svc.Events.List(cal.CalendarID).Context(ctx).
+			PrivateExtendedProperty("calsync=v1").
+			TimeMin(window.Start.UTC().Format(time.RFC3339)).
+			TimeMax(window.End.UTC().Format(time.RFC3339))
+		if pageToken != "" {
+			call.PageToken(pageToken)
+		}
+		var resp *calendar.Events
+		err := c.doWithRetry(ctx, func() error {
+			var e error
+			resp, e = call.Do()
+			return e
+		})
+		if err != nil {
+			return nil, fmt.Errorf("google[%s]: list blockers %s: %w", c.accountID, cal, normalizeAuthErr(err))
+		}
+		for _, item := range resp.Items {
+			if item.Status == "cancelled" {
+				continue
+			}
+			nev := normalizeEvent(item)
+			records = append(records, model.BlockerRecord{
+				EventID:   nev.ID,
+				OriginTag: nev.OriginTag,
+				TimeHash:  model.TimeHash(nev),
+			})
+		}
+		if resp.NextPageToken == "" {
+			return records, nil
+		}
+		pageToken = resp.NextPageToken
+	}
+}

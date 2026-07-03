@@ -16,6 +16,7 @@ import (
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 
+	"github.com/work-a-co/calsync/internal/model"
 	"github.com/work-a-co/calsync/internal/provider"
 )
 
@@ -102,6 +103,26 @@ func normalizeAuthErr(err error) error {
 		return fmt.Errorf("%w: %w", provider.ErrAuthExpired, err)
 	}
 	return provider.NormalizeAuthErr(err)
+}
+
+// GetCalendarTimezone は calendars.get の timeZone(IANA 名)を返す。
+// 終日ブロッカー作成時の現地日付境界の決定に使う(仕様書6.6)。
+func (c *Client) GetCalendarTimezone(ctx context.Context, cal model.CalendarRef) (string, error) {
+	svc, err := c.service(ctx)
+	if err != nil {
+		return "", err
+	}
+	call := svc.Calendars.Get(cal.CalendarID).Context(ctx)
+	var got *calendar.Calendar
+	err = c.doWithRetry(ctx, func() error {
+		var e error
+		got, e = call.Do()
+		return e
+	})
+	if err != nil {
+		return "", fmt.Errorf("google[%s]: calendars.get %s: %w", c.accountID, cal, normalizeAuthErr(err))
+	}
+	return got.TimeZone, nil
 }
 
 // isRateLimited は Google のクォータ系エラー(再試行対象)かを判定する。
