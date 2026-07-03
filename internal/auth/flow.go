@@ -43,17 +43,20 @@ func runLoopbackFlow(ctx context.Context, cfg *oauth2.Config, port int, out io.W
 	defer ln.Close()
 	actualPort := ln.Addr().(*net.TCPAddr).Port
 
-	// リスナーは常に 127.0.0.1。リダイレクト URL のホスト名表記のみ cfg に従う
-	// (Microsoft は "http://localhost" — localhost はポート無視でマッチする公式仕様。仕様書9.1)。
+	// リスナーは常に 127.0.0.1。リダイレクト URL のホスト名とパスの表記は cfg に従う
+	// (Microsoft は "http://localhost" — ポートは無視されるがパスは照合されるため、
+	// パスなし登録にはパスなしの redirect_uri を送る必要がある。実測 2026-07-03)。
 	host := "127.0.0.1"
+	path := "/callback" // cfg にヒントが無い場合の既定
 	if cfg.RedirectURL != "" {
 		if u, perr := url.Parse(cfg.RedirectURL); perr == nil && u.Hostname() != "" {
 			host = u.Hostname()
+			path = u.Path // "http://localhost" のようなパスなしヒントなら空になる
 		}
 	}
 
 	conf := *cfg // 呼び出し元の Config は変更しない
-	conf.RedirectURL = fmt.Sprintf("http://%s:%d/callback", host, actualPort)
+	conf.RedirectURL = fmt.Sprintf("http://%s:%d%s", host, actualPort, path)
 
 	state, err := randomState()
 	if err != nil {

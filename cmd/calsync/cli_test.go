@@ -124,7 +124,7 @@ func TestOauthConfigForMicrosoftUsesLocalhostRedirect(t *testing.T) {
 
 	oc, err := oauthConfigFor(cfg, acct)
 	require.NoError(t, err)
-	// Entra/MSA のアプリ登録 http://localhost は 127.0.0.1 と照合されない
-	// (実測: login.live.com が invalid_request で拒否)。ホスト名は localhost 固定。
-	require.Equal(t, "http://localhost/callback", oc.RedirectURL)
+	// MSA(login.live.com)はポートを無視するがパスは照合する(実測 2026-07-03)。
+	// アプリ登録 http://localhost に合わせ「localhost・パスなし」の形にする。
+	require.Equal(t, "http://localhost", oc.RedirectURL)
 }

@@ -64,11 +64,11 @@ func oauthConfigFor(cfg *config.Config, acct config.Account) (*oauth2.Config, er
 		}
 		return &oauth2.Config{
 			ClientID: cfg.Providers.Microsoft.ClientID,
-			// ホスト名は localhost 必須(仕様書9.1)。アプリ登録の http://localhost は
-			// 「localhost なら任意ポート可」だが 127.0.0.1 とは照合されない
-			// (実測: login.live.com が invalid_request で拒否する)。
-			// 実ポートは RunLoopbackFlow がホスト名を保持したまま差し込む。
-			RedirectURL: "http://localhost/callback",
+			// アプリ登録(http://localhost)と同じ「localhost・パスなし」の形にする。
+			// MSA(login.live.com)はポートを無視するがパスは照合するため、
+			// /callback 付きだと invalid_request になる(実測 2026-07-03。MSAL と同じ形)。
+			// 実ポートは RunLoopbackFlow がホスト名・パスを保持したまま差し込む。
+			RedirectURL: "http://localhost",
 			Endpoint: oauth2.Endpoint{
 				AuthURL:       "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
 				TokenURL:      "https://login.microsoftonline.com/common/oauth2/v2.0/token",

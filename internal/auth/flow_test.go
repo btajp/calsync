@@ -268,3 +268,63 @@ func TestRunDeviceFlow(t *testing.T) {
 	require.Contains(t, out.String(), "ABCD-1234")
 	require.Contains(t, out.String(), "https://microsoft.com/devicelogin")
 }
+
+// MSA(login.live.com)はアプリ登録が http://localhost のときポートは無視するが
+// パスは照合する(実測 2026-07-03: /callback 付きは invalid_request、パスなしは受理)。
+// cfg.RedirectURL がパスなしのとき、実際の redirect_uri もパスなしになることを検証する。
+func TestRunLoopbackFlowBareRedirectPath(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"atoken","token_type":"Bearer","refresh_token":"rtoken","expires_in":3600}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cfg := &oauth2.Config{
+		ClientID:    "test-client",
+		RedirectURL: "http://localhost", // パスなし(Microsoft 用の形)
+		Endpoint: oauth2.Endpoint{
+			AuthURL:   srv.URL + "/authorize",
+			TokenURL:  srv.URL + "/token",
+			AuthStyle: oauth2.AuthStyleInParams,
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	authURLCh := make(chan string, 1)
+	type flowRes struct {
+		tok *oauth2.Token
+		err error
+	}
+	resCh := make(chan flowRes, 1)
+	var out bytes.Buffer
+	go func() {
+		tok, err := runLoopbackFlow(ctx, cfg, 0, &out, func(string) error { return nil }, authURLCh)
+		resCh <- flowRes{tok: tok, err: err}
+	}()
+
+	authURL := <-authURLCh
+	u, err := url.Parse(authURL)
+	require.NoError(t, err)
+	redirect := u.Query().Get("redirect_uri")
+	ru, err := url.Parse(redirect)
+	require.NoError(t, err)
+	require.Equal(t, "localhost", ru.Hostname(), "ホスト名は cfg のヒントを維持する")
+	require.Empty(t, ru.Path, "MSA はパスまで照合するため redirect_uri はパスなしであること")
+	require.NotEmpty(t, ru.Port(), "実ポートが差し込まれていること")
+
+	// コールバックはパスなし(ルート)で受ける。リスナーは 127.0.0.1 なので直接叩く
+	state := u.Query().Get("state")
+	cb := fmt.Sprintf("http://127.0.0.1:%s/?state=%s&code=testcode", ru.Port(), url.QueryEscape(state))
+	resp, err := http.Get(cb)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	res := <-resCh
+	require.NoError(t, res.err)
+	require.Equal(t, "atoken", res.tok.AccessToken)
+}
