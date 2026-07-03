@@ -33,14 +33,21 @@ func nextReconcileAt(now time.Time, hhmm string) time.Time {
 //   - Cfg.ReconcileAt(コンテナのローカル TZ)を過ぎたら Reconcile を実行する。
 //     Reconcile 後は reauth スキップを解除して再試行の機会を与える
 //   - ctx キャンセルで nil を返して終了する
+//
+// consecutiveFailureResyncThreshold: 同一カレンダーの同期がこの回数連続で失敗したら、
+// カーソルが毒された(Graph が 410/syncStateNotFound ではなく持続的な 5xx を返し続けた
+// 実測ケース・2026-07-04)とみなし、FullResync でカーソルを再初期化して自己回復する。
+const consecutiveFailureResyncThreshold = 5
+
 func (e *Engine) Run(ctx context.Context) error {
-	reauth := make(map[string]bool) // account ID -> reauth_required
+	reauth := make(map[string]bool)             // account ID -> reauth_required
+	failures := make(map[model.CalendarRef]int) // 連続同期失敗回数
 	next := nextReconcileAt(e.now(), e.Cfg.ReconcileAt)
 	ticker := time.NewTicker(e.Cfg.PollInterval)
 	defer ticker.Stop()
 
 	// 起動直後に 1 ティック実行(初回同期をポーリング間隔まで待たせない)
-	e.tick(ctx, reauth)
+	e.tick(ctx, reauth, failures)
 
 	for {
 		select {
@@ -56,13 +63,14 @@ func (e *Engine) Run(ctx context.Context) error {
 			// 日次リコンサイルのタイミングで reauth スキップを解除し再試行する
 			// (再認証済みなら次のティックから自動バックフィルされる)
 			reauth = make(map[string]bool)
+			failures = make(map[model.CalendarRef]int)
 		}
-		e.tick(ctx, reauth)
+		e.tick(ctx, reauth, failures)
 	}
 }
 
 // tick は 1 ポーリングサイクル分の同期を行う。
-func (e *Engine) tick(ctx context.Context, reauth map[string]bool) {
+func (e *Engine) tick(ctx context.Context, reauth map[string]bool, failures map[model.CalendarRef]int) {
 	for _, acct := range e.Cfg.Accounts {
 		if reauth[acct.ID] {
 			continue
@@ -99,6 +107,7 @@ func (e *Engine) tick(ctx context.Context, reauth map[string]bool) {
 				// 参照する)。SetCalendarError は "" 指定でエラークリア + 時刻更新の
 				// 両方を担う(store 契約)。TargetAuthError のみの場合、origin の
 				// 同期自体は完走している(カーソルも前進済み)ため成功扱いにする
+				delete(failures, ref)
 				if serr := e.Store.SetCalendarError(ref, ""); serr != nil {
 					log.Printf("clear calendar error %s: %v", ref, serr)
 				}
@@ -113,7 +122,22 @@ func (e *Engine) tick(ctx context.Context, reauth map[string]bool) {
 					log.Printf("set calendar error %s: %v", ref, serr)
 				}
 				log.Printf("account %s: authentication expired; pausing sync until reauth (%s)", acct.ID, msg)
+				delete(failures, ref)
 				break // 同一アカウントの残りカレンダーもスキップ
+			}
+			failures[ref]++
+			if failures[ref] >= consecutiveFailureResyncThreshold {
+				log.Printf("sync %s: %v (%d consecutive failures; forcing full resync to re-establish the cursor)", ref, err, failures[ref])
+				delete(failures, ref)
+				if rerr := e.FullResync(ctx, ref); rerr != nil {
+					log.Printf("forced full resync %s: %v", ref, rerr)
+					if serr := e.Store.SetCalendarError(ref, rerr.Error()); serr != nil {
+						log.Printf("set calendar error %s: %v", ref, serr)
+					}
+				} else if serr := e.Store.SetCalendarError(ref, ""); serr != nil {
+					log.Printf("clear calendar error %s: %v", ref, serr)
+				}
+				continue
 			}
 			log.Printf("sync %s: %v", ref, err)
 			if serr := e.Store.SetCalendarError(ref, err.Error()); serr != nil {

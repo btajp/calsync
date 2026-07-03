@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -220,7 +221,7 @@ func TestTickAttributesTargetAuthExpiryToTargetAccount(t *testing.T) {
 	f.SetFullState(refA, []model.NormalizedEvent{busyEvent("ev1")})
 
 	reauth := map[string]bool{}
-	e.tick(ctx, reauth)
+	e.tick(ctx, reauth, map[model.CalendarRef]int{})
 
 	// (a) 正常ターゲット C にはブロッカーが作成される(B のみスキップ)
 	require.Len(t, f.Blockers(calCv), 1, "healthy target c must still receive the blocker")
@@ -289,7 +290,7 @@ func TestTickPersistsSuccessOnSyncCalendar(t *testing.T) {
 		Now:       time.Now,
 	}
 
-	e.tick(context.Background(), map[string]bool{})
+	e.tick(context.Background(), map[string]bool{}, map[model.CalendarRef]int{})
 
 	got, err := st.GetCalendar(ref)
 	require.NoError(t, err)
@@ -328,7 +329,7 @@ func TestTickClearsPriorReauthErrorOnSuccess(t *testing.T) {
 		Now:       time.Now,
 	}
 
-	e.tick(context.Background(), map[string]bool{})
+	e.tick(context.Background(), map[string]bool{}, map[model.CalendarRef]int{})
 
 	got, err := st.GetCalendar(ref)
 	require.NoError(t, err)
@@ -353,4 +354,43 @@ func TestRunWithoutNowDoesNotPanic(t *testing.T) {
 		runErr = e.Run(ctx)
 	})
 	require.NoError(t, runErr)
+}
+
+// TestTickForcesFullResyncAfterConsecutiveFailures は「毒されたカーソル」への防御を検証する。
+// 実測(2026-07-04): Graph が壊れた deltaLink に対し 410/syncStateNotFound ではなく持続的な
+// 504 を返し続け、カーソル失効処理が発火せず同じリンクを永遠にリトライした。同一カレンダーの
+// 同期が閾値回数連続で失敗したらカーソル毒化とみなし、FullResync(新規カーソル確立)で自己回復する。
+func TestTickForcesFullResyncAfterConsecutiveFailures(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+
+	f.SetFullState(refA, []model.NormalizedEvent{busyEvent("ev1")})
+	reauth := map[string]bool{}
+	failures := map[model.CalendarRef]int{}
+
+	// 1回目のティックで正常同期しカーソルを確立する
+	e.tick(ctx, reauth, failures)
+	before, err := e.Store.GetCalendar(refA)
+	require.NoError(t, err)
+	require.NotEmpty(t, before.Cursor)
+
+	// 閾値未満の連続失敗ではエラー記録のみで再初期化しない
+	transient := errors.New("graph delta: status 504")
+	for i := 0; i < consecutiveFailureResyncThreshold-1; i++ {
+		f.FailNext(refA, transient)
+		e.tick(ctx, reauth, failures)
+	}
+	st, err := e.Store.GetCalendar(refA)
+	require.NoError(t, err)
+	require.Contains(t, st.LastError, "504", "below the threshold the error must only be recorded")
+	require.Equal(t, before.Cursor, st.Cursor, "cursor must not change while below the threshold")
+
+	// 閾値到達で FullResync が強制され、新規カーソルで自己回復する
+	f.FailNext(refA, transient)
+	e.tick(ctx, reauth, failures)
+	after, err := e.Store.GetCalendar(refA)
+	require.NoError(t, err)
+	require.Empty(t, after.LastError, "forced full resync must clear the error state")
+	require.NotEqual(t, before.Cursor, after.Cursor, "cursor must be re-established")
+	require.Zero(t, failures[refA], "failure counter must reset after the forced resync")
 }
