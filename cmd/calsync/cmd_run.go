@@ -1,12 +1,16 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/spf13/cobra"
 
 	"github.com/btajp/calsync/internal/config"
+	"github.com/btajp/calsync/internal/engine"
+	"github.com/btajp/calsync/internal/notify/slack"
 )
 
 var runCmd = &cobra.Command{
@@ -18,11 +22,22 @@ var runCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		// Slack 通知が設定されていればトークンを先に検証する(store を開く前に
+		// fail fast。デーモン専用機能のため run でのみ検証する。スペック 9 章)
+		var notifier engine.Notifier
+		if sc := cfg.Notifications.Slack; sc != nil {
+			token := os.Getenv(sc.BotTokenEnv)
+			if token == "" {
+				return fmt.Errorf("notifications.slack: environment variable %s is not set (export the bot token or remove the notifications section)", sc.BotTokenEnv)
+			}
+			notifier = slack.New(token, sc.Channel)
+		}
 		eng, err := buildEngine(cfg, flagData)
 		if err != nil {
 			return err
 		}
 		defer eng.Store.Close()
+		eng.Notifier = notifier
 		ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
 		return eng.Run(ctx)
