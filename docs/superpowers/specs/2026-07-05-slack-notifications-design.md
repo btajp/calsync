@@ -166,7 +166,7 @@ flowchart TB
 - 1 リクエスト 10 秒タイムアウト。Run ループ内の同期呼び出しだが上限が保証されるためループを長時間塞がない
 - エラーは 2 分類の sentinel に正規化する(provider の autherr.go と同じ「方言を閉じ込める」方針。Slack API の `ok:false` + `error` 文字列はこのパッケージから漏らさない):
   - **リトライ可能**: ネットワークエラー、5xx、429(rate limit)。**この 3 種のみ**
-  - **リトライ不能**: 上記以外すべて。`invalid_auth`、`channel_not_found`、`not_in_channel`、`missing_scope` 等の設定起因エラーに加え、**`ok:false` の未知エラー文字列も既定でリトライ不能に分類**する(13 章スパイク 4 の実測で列挙を確定)
+  - **リトライ不能**: 上記以外すべて。`invalid_auth`、`channel_not_found`、`not_in_channel`、`missing_scope` 等の設定起因エラーに加え、**`ok:false` の未知エラー文字列も既定でリトライ不能に分類**する(エラー文字列の列挙はユニットで検証済み。網羅は 13 章スパイク 4 — 初回稼働時の実測で確定させる)
 
 ## 9. エンジン統合とエラーポリシー
 
