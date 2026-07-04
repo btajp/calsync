@@ -8,6 +8,8 @@
 
 ### Added
 
+- **Slack 通知(#10)**: 朝のダイジェスト(指定時刻に当日の実予定を全アカウント横断で通知。ライブ取得のため free の予定も件名付きで含む)と開始前リマインド(指定時間前に通知。イベントキャッシュ+送信記録テーブルで再起動しても二重送信しない)。`notifications.slack`(`bot_token_env` / `channel` / `morning_digest` / `remind_before`)で設定し、トークンは環境変数のみ。件名は Slack 仕様のエスケープ済み(メンションインジェクション防止)
+
 - **ブロッカーの元アカウント表示(per-account オプトイン、#7)**: `accounts[].show_origin_in_description: true` で、そのアカウントのカレンダーに作られるブロッカーの説明欄に元アカウントの ID を記載(Google: description / Microsoft: body)。既定は従来どおり完全匿名。変更検出ハッシュにポリシー成分を合成しているため、トグルの ON/OFF は次回リコンサイルで既存ブロッカーにも遡及反映される
 
 - **相互 Busy ブロッカー同期エンジン**: 複数の Google カレンダー / Microsoft 365(個人 Microsoft アカウント含む)を差分ポーリング(Google: syncToken / Graph: calendarView delta)で監視し、Busy 予定を他の全アカウントへ「予定あり」ブロッカーとしてミラーする Hub & Spoke 構成

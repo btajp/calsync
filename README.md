@@ -176,6 +176,62 @@ accounts:
 - 設定の ON/OFF は**次回のリコンサイル(毎日 04:00 または `calsync reconcile`)で既存ブロッカーにも遡及反映**されます
 - 説明欄はそのカレンダーの共有設定によっては第三者に見える可能性があります。組織のカレンダーでは慎重に判断してください
 
+## Slack 通知(オプション)
+
+朝のダイジェスト(指定時刻に当日の実予定を全アカウント横断で通知)と、開始前リマインド(予定の指定時間前に通知)を Slack の DM またはチャンネルへ送信できます。既定では無効です。
+
+### 設定
+
+```yaml
+notifications:
+  slack:
+    bot_token_env: SLACK_BOT_TOKEN  # トークンを読む環境変数名(既定 SLACK_BOT_TOKEN)。トークン自体は YAML に書きません
+    channel: "C0XXXXXXX"            # C…/G… ならチャンネル、U… なら DM(conversations.open で自動解決)
+    morning_digest: "07:30"         # 省略するとダイジェスト無効。"HH:MM"、コンテナの TZ(reconcile_at と同形式)
+    remind_before: 10m               # 省略するとリマインド無効。正の Go duration。poll_interval 以上が必須
+```
+
+- `morning_digest` と `remind_before` の両方を省略すると設定エラーになります(設定したのに何も送られない事故の防止)
+- トークンは環境変数からのみ読みます(YAML にトークンを書かないでください)。検証は `calsync run` 起動時のみ行われ、トークンが空だと起動を拒否します(`status` / `doctor` はトークンなしでも動作します)
+
+### Slack App の作成手順
+
+1. [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**
+2. **OAuth & Permissions** → **Scopes** → **Bot Token Scopes** に以下を追加します:
+   - `chat:write` (必須。メッセージ送信)
+   - `im:write` (DM 送信を使う場合)
+   - `chat:write.public` (Bot が未参加の公開チャンネルへ送る場合)
+3. **Install to Workspace** を実行し、発行された `xoxb-` から始まる Bot User OAuth Token を控えます
+4. **プライベートチャンネルへ送る場合は、対象チャンネルで `/invite @<App名>` して Bot を招待してください**(未招待のままだと `not_in_channel` エラーになります)
+
+### channel の調べ方
+
+- チャンネル宛て: チャンネル詳細画面の一番下にある Channel ID(`C…` または `G…`)
+- DM 宛て: 送り先ユーザーのプロフィール → 「その他」→ **メンバー ID をコピー**(`U…`)
+
+### docker compose での渡し方
+
+トークンは `docker-compose.yaml` の `environment` 経由でコンテナに渡し、実体は `.env` に置きます(`.env` はリポジトリにコミットしないでください):
+
+```yaml
+services:
+  calsync:
+    environment:
+      TZ: Asia/Tokyo
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+```
+
+```bash
+# .env
+SLACK_BOT_TOKEN=xoxb-...
+```
+
+### 制約
+
+- リマインドの対象は「busy かつ時刻指定の予定」のみです。**free の予定・終日予定はリマインド対象外**です(v1 制約)。ダイジェストはライブ取得のため両方とも件名付きで含まれます
+- calsync を停止していた間に日付を跨いだ場合、その日のダイジェストはキャッチアップされません(`reconcile_at` と同じ制約です)
+- **通知先チャンネルの公開範囲に注意してください**。予定の件名がそのまま通知本文に含まれます。共有範囲の広いチャンネルを指定すると、予定の内容が意図せず広く見える可能性があります
+
 ## アカウントの削除
 
 **必ず `calsync accounts remove <id>` を実行してから、calsync.yaml からそのアカウントのエントリを削除してください。順序を逆にしないでください。**

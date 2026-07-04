@@ -233,7 +233,7 @@ type Notifier interface {
 
 **スパイク 1・2 は Title 配管全体(4 章)の前提のため、実装計画の最初のタスクに置くこと。**
 
-1. Graph の calendarView delta 応答に `subject` が含まれるか(`$select` 指定の有無と合わせて確認)
-2. Google の増分同期応答に `summary` が含まれるか(現行実装が `fields` でフィールドを絞っていないか確認)
-3. `conversations.open` + `chat.postMessage` の DM 送信が Bot トークン+`im:write` で成立するか
-4. `channel_not_found` / `not_in_channel` / `missing_scope` の実際のエラー文字列(リトライ不能分類の網羅確認)
+1. Graph の calendarView delta 応答に `subject` が含まれるか(`$select` 指定の有無と合わせて確認)。ユニット(フィクスチャ/httptest)検証済み。実 API は初回稼働時に要実測
+2. ~~Google の増分同期応答に `summary` が含まれるか(現行実装が `fields` でフィールドを絞っていないか確認)~~ → **コード確認済み(2026-07-05)**: 現行 Google 実装は `fields` でフィールドを絞っておらず summary は応答に含まれる。応答パースはユニットで検証済み
+3. `conversations.open` + `chat.postMessage` の DM 送信が Bot トークン+`im:write` で成立するか。ユニット(フィクスチャ/httptest)検証済み。実 API は初回稼働時に要実測
+4. `channel_not_found` / `not_in_channel` / `missing_scope` の実際のエラー文字列(リトライ不能分類の網羅確認)。ユニット(フィクスチャ/httptest)検証済み。実 API は初回稼働時に要実測
