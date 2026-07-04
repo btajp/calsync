@@ -164,3 +164,17 @@ func TestRemoveAccountProviderUnavailable(t *testing.T) {
 		require.Equal(t, []string{"a"}, tokens.deleted)
 	})
 }
+
+// accounts remove がそのアカウントの reminders_sent も削除する(スペック 4.3)。
+func TestRemoveAccountDeletesReminderRecords(t *testing.T) {
+	e, _ := newTestEngine(t)
+	ctx := context.Background()
+	start := e.now()
+	require.NoError(t, e.Store.MarkReminderSent(refA, "ev1", "u@x", start, start))
+
+	require.NoError(t, RemoveAccount(ctx, e, &recordingTokenDeleter{}, "a", true))
+
+	sent, err := e.Store.WasReminderSent(refA, "ev1", start)
+	require.NoError(t, err)
+	require.False(t, sent)
+}

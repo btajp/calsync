@@ -453,5 +453,8 @@ func RemoveAccount(ctx context.Context, e *Engine, tokens TokenDeleter, accountI
 	if err := e.Store.DeleteCalendarsForAccount(accountID); err != nil {
 		return err
 	}
+	if err := e.Store.DeleteRemindersForAccount(accountID); err != nil {
+		return err
+	}
 	return tokens.Delete(accountID)
 }

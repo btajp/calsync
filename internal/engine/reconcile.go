@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/btajp/calsync/internal/config"
 	"github.com/btajp/calsync/internal/model"
@@ -167,6 +168,11 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 	}
 	if err := e.reevaluateSuppressed(ctx); err != nil {
 		errs = append(errs, fmt.Errorf("reevaluate suppressed: %w", err))
+	}
+	// 通知送信記録の掃除(スペック 4.3: start_utc < now-48h。日次リコンサイルは
+	// デーモンで常に有効なため、ここへの相乗りでテーブルは肥大しない)
+	if err := e.Store.CleanupRemindersSent(e.now().Add(-48 * time.Hour)); err != nil {
+		errs = append(errs, fmt.Errorf("cleanup reminders_sent: %w", err))
 	}
 	return errors.Join(errs...)
 }
