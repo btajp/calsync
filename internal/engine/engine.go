@@ -19,6 +19,7 @@ type Engine struct {
 	Providers map[string]provider.Provider // key: account ID
 	Cfg       *config.Config
 	Now       func() time.Time // テストで固定する。nil なら time.Now
+	Notifier  Notifier         // nil なら通知無効(cmd_run のみが注入する)
 }
 
 func (e *Engine) now() time.Time {
