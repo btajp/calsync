@@ -6,11 +6,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/work-a-co/calsync/internal/auth"
-	"github.com/work-a-co/calsync/internal/config"
-	"github.com/work-a-co/calsync/internal/engine"
-	"github.com/work-a-co/calsync/internal/provider"
-	"github.com/work-a-co/calsync/internal/store"
+	"github.com/btajp/calsync/internal/auth"
+	"github.com/btajp/calsync/internal/config"
+	"github.com/btajp/calsync/internal/engine"
+	"github.com/btajp/calsync/internal/provider"
+	"github.com/btajp/calsync/internal/store"
 )
 
 var accountsForce bool

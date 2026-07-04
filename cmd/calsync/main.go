@@ -12,13 +12,13 @@ import (
 	"golang.org/x/oauth2"
 	googleoauth "golang.org/x/oauth2/google"
 
-	"github.com/work-a-co/calsync/internal/auth"
-	"github.com/work-a-co/calsync/internal/config"
-	"github.com/work-a-co/calsync/internal/engine"
-	"github.com/work-a-co/calsync/internal/provider"
-	googleprov "github.com/work-a-co/calsync/internal/provider/google"
-	msprov "github.com/work-a-co/calsync/internal/provider/microsoft"
-	"github.com/work-a-co/calsync/internal/store"
+	"github.com/btajp/calsync/internal/auth"
+	"github.com/btajp/calsync/internal/config"
+	"github.com/btajp/calsync/internal/engine"
+	"github.com/btajp/calsync/internal/provider"
+	googleprov "github.com/btajp/calsync/internal/provider/google"
+	msprov "github.com/btajp/calsync/internal/provider/microsoft"
+	"github.com/btajp/calsync/internal/store"
 )
 
 var (

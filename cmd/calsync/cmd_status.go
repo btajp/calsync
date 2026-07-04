@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/work-a-co/calsync/internal/store"
+	"github.com/btajp/calsync/internal/store"
 )
 
 // renderStatus は ListCalendars の結果を表形式文字列にする(テスト対象の純粋整形)。

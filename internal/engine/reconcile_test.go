@@ -8,9 +8,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/work-a-co/calsync/internal/model"
-	"github.com/work-a-co/calsync/internal/provider"
-	"github.com/work-a-co/calsync/internal/store"
+	"github.com/btajp/calsync/internal/model"
+	"github.com/btajp/calsync/internal/provider"
+	"github.com/btajp/calsync/internal/store"
 )
 
 // FullResync の set-difference: 1件消滅・1件時刻変更・1件新規・1件生存。

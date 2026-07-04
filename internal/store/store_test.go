@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/work-a-co/calsync/internal/model"
+	"github.com/btajp/calsync/internal/model"
 )
 
 // mustOpen は t.TempDir にストアを開き、テスト終了時に閉じる。

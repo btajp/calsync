@@ -12,8 +12,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/work-a-co/calsync/internal/model"
-	"github.com/work-a-co/calsync/internal/provider"
+	"github.com/btajp/calsync/internal/model"
+	"github.com/btajp/calsync/internal/provider"
 )
 
 const wantOriginPropID = "String {b7dbd76c-3a35-4b41-9d80-6a3f31f2a6b9} Name calsyncOrigin"

@@ -3,9 +3,9 @@ package engine
 import (
 	"context"
 
-	"github.com/work-a-co/calsync/internal/config"
-	"github.com/work-a-co/calsync/internal/model"
-	"github.com/work-a-co/calsync/internal/store"
+	"github.com/btajp/calsync/internal/config"
+	"github.com/btajp/calsync/internal/model"
+	"github.com/btajp/calsync/internal/store"
 )
 
 // isDuplicateOnTarget は「ターゲットの events キャッシュに同一 iCalUID・同一開始の

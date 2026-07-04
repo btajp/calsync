@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/work-a-co/calsync/internal/config"
-	"github.com/work-a-co/calsync/internal/model"
-	"github.com/work-a-co/calsync/internal/provider"
-	"github.com/work-a-co/calsync/internal/store"
+	"github.com/btajp/calsync/internal/config"
+	"github.com/btajp/calsync/internal/model"
+	"github.com/btajp/calsync/internal/provider"
+	"github.com/btajp/calsync/internal/store"
 )
 
 // Engine は同期エンジン本体。プロバイダ非依存(仕様2章)。

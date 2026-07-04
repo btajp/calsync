@@ -1,6 +1,6 @@
 package engine
 
-import "github.com/work-a-co/calsync/internal/model"
+import "github.com/btajp/calsync/internal/model"
 
 // ShouldBlock は「busy かつ未辞退かつ削除通知でない」イベントだけを
 // ブロッカー配布の対象とする(仕様6.2。未返信・仮承諾は IsBusy=true として

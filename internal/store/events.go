@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/work-a-co/calsync/internal/model"
+	"github.com/btajp/calsync/internal/model"
 )
 
 func boolToInt(b bool) int {

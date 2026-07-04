@@ -12,7 +12,7 @@ import (
 	"github.com/gofrs/flock"
 	_ "modernc.org/sqlite" // driver name "sqlite" を登録
 
-	"github.com/work-a-co/calsync/internal/model"
+	"github.com/btajp/calsync/internal/model"
 )
 
 // ErrLocked は別の calsync プロセスがデータディレクトリを掴んでいる場合に Open が返す。

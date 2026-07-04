@@ -9,8 +9,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/work-a-co/calsync/internal/model"
-	"github.com/work-a-co/calsync/internal/provider"
+	"github.com/btajp/calsync/internal/model"
+	"github.com/btajp/calsync/internal/provider"
 )
 
 // コンパイル時に provider.Provider を満たすことを保証する。

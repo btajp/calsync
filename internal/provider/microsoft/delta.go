@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/work-a-co/calsync/internal/model"
-	"github.com/work-a-co/calsync/internal/provider"
+	"github.com/btajp/calsync/internal/model"
+	"github.com/btajp/calsync/internal/provider"
 )
 
 // maxDeltaPages is the per-round page cap of the pagination circuit breaker

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/work-a-co/calsync/internal/provider"
+	"github.com/btajp/calsync/internal/provider"
 )
 
 // TargetAuthError は「ターゲットアカウントへのブロッカー書き込みが認証失効で

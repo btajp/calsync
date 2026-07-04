@@ -7,8 +7,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/work-a-co/calsync/internal/model"
-	"github.com/work-a-co/calsync/internal/store"
+	"github.com/btajp/calsync/internal/model"
+	"github.com/btajp/calsync/internal/store"
 )
 
 // dupPair は「a の origin 予定」と「b 上の同一会議の実予定」の組を返す。

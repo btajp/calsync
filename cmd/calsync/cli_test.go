@@ -9,10 +9,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
 
-	"github.com/work-a-co/calsync/internal/auth"
-	"github.com/work-a-co/calsync/internal/config"
-	"github.com/work-a-co/calsync/internal/model"
-	"github.com/work-a-co/calsync/internal/store"
+	"github.com/btajp/calsync/internal/auth"
+	"github.com/btajp/calsync/internal/config"
+	"github.com/btajp/calsync/internal/model"
+	"github.com/btajp/calsync/internal/store"
 )
 
 func TestFindOrphanAccounts(t *testing.T) {

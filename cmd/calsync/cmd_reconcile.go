@@ -3,7 +3,7 @@ package main
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/work-a-co/calsync/internal/config"
+	"github.com/btajp/calsync/internal/config"
 )
 
 var reconcileCmd = &cobra.Command{

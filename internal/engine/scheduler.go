@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/work-a-co/calsync/internal/model"
+	"github.com/btajp/calsync/internal/model"
 )
 
 // nextReconcileAt は now と同じロケーションで、hhmm("15:04" 形式)が指す直近の
