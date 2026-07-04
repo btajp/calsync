@@ -21,6 +21,7 @@ type Config struct {
 	ReconcileAt       string        // 既定 "04:00"(コンテナのローカルTZで解釈)
 	DedupeSameMeeting bool          // 既定 true
 	BusyShowAs        []string      // 既定 [busy, oof, tentative]
+	Notifications     NotificationsConfig
 	Providers         ProvidersConfig
 	Accounts          []Account
 }
@@ -28,6 +29,20 @@ type Config struct {
 type ProvidersConfig struct {
 	Google    struct{ CredentialsFile string } // GCP クライアントJSON のパス
 	Microsoft struct{ ClientID string }        // Entra アプリの client_id
+}
+
+// NotificationsConfig は通知設定。Slack が nil なら通知機能は完全に無効
+// (Engine.Notifier が注入されない。スペック 3 章)。
+type NotificationsConfig struct {
+	Slack *SlackConfig
+}
+
+// SlackConfig は Slack Bot 通知の設定(スペック 3 章)。
+type SlackConfig struct {
+	BotTokenEnv   string        // トークンを読む環境変数名。既定 "SLACK_BOT_TOKEN"
+	Channel       string        // C…/G…: チャンネル / U…: DM(conversations.open で解決)
+	MorningDigest string        // "HH:MM"(コンテナ TZ)。空ならダイジェスト無効
+	RemindBefore  time.Duration // 0 ならリマインド無効
 }
 
 type Account struct {
@@ -43,14 +58,26 @@ type Account struct {
 // rawConfig は YAML の生の形。KnownFields(true) の照合対象になるため、
 // 受理するキーはここに列挙されたものが全て。
 type rawConfig struct {
-	PollInterval      string       `yaml:"poll_interval"`
-	SyncWindow        string       `yaml:"sync_window"`
-	BlockerTitle      string       `yaml:"blocker_title"`
-	ReconcileAt       string       `yaml:"reconcile_at"`
-	DedupeSameMeeting *bool        `yaml:"dedupe_same_meeting"` // 未指定(nil)と false を区別する
-	BusyShowAs        []string     `yaml:"busy_show_as"`
-	Providers         rawProviders `yaml:"providers"`
-	Accounts          []rawAccount `yaml:"accounts"`
+	PollInterval      string           `yaml:"poll_interval"`
+	SyncWindow        string           `yaml:"sync_window"`
+	BlockerTitle      string           `yaml:"blocker_title"`
+	ReconcileAt       string           `yaml:"reconcile_at"`
+	DedupeSameMeeting *bool            `yaml:"dedupe_same_meeting"` // 未指定(nil)と false を区別する
+	BusyShowAs        []string         `yaml:"busy_show_as"`
+	Notifications     rawNotifications `yaml:"notifications"`
+	Providers         rawProviders     `yaml:"providers"`
+	Accounts          []rawAccount     `yaml:"accounts"`
+}
+
+type rawNotifications struct {
+	Slack *rawSlack `yaml:"slack"`
+}
+
+type rawSlack struct {
+	BotTokenEnv   string `yaml:"bot_token_env"`
+	Channel       string `yaml:"channel"`
+	MorningDigest string `yaml:"morning_digest"`
+	RemindBefore  string `yaml:"remind_before"`
 }
 
 type rawProviders struct {
@@ -157,6 +184,37 @@ func Load(path string) (*Config, error) {
 			}
 		}
 		cfg.BusyShowAs = raw.BusyShowAs
+	}
+
+	if rs := raw.Notifications.Slack; rs != nil {
+		sc := &SlackConfig{BotTokenEnv: rs.BotTokenEnv, Channel: rs.Channel, MorningDigest: rs.MorningDigest}
+		if sc.BotTokenEnv == "" {
+			sc.BotTokenEnv = "SLACK_BOT_TOKEN"
+		}
+		if sc.Channel == "" {
+			return nil, fmt.Errorf("config: notifications.slack.channel is required")
+		}
+		if sc.MorningDigest != "" {
+			if _, err := time.Parse("15:04", sc.MorningDigest); err != nil {
+				return nil, fmt.Errorf("config: invalid notifications.slack.morning_digest %q (want \"HH:MM\", e.g. \"07:30\")", sc.MorningDigest)
+			}
+		}
+		if rs.RemindBefore != "" {
+			d, err := time.ParseDuration(rs.RemindBefore)
+			if err != nil || d <= 0 {
+				return nil, fmt.Errorf("config: invalid notifications.slack.remind_before %q (want a positive Go duration such as \"10m\")", rs.RemindBefore)
+			}
+			// リマインド判定は tick(poll_interval)毎のため、これを下回るとウィンドウが
+			// tick 間隔より狭くなり発火保証がなくなる(スペック 3 章)
+			if d < cfg.PollInterval {
+				return nil, fmt.Errorf("config: notifications.slack.remind_before %q must be >= poll_interval %q (reminders are checked once per poll tick)", rs.RemindBefore, cfg.PollInterval)
+			}
+			sc.RemindBefore = d
+		}
+		if sc.MorningDigest == "" && sc.RemindBefore == 0 {
+			return nil, fmt.Errorf("config: notifications.slack: set at least one of morning_digest or remind_before")
+		}
+		cfg.Notifications.Slack = sc
 	}
 
 	seen := make(map[string]bool, len(raw.Accounts))
