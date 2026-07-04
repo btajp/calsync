@@ -74,7 +74,8 @@ type apiResponse struct {
 
 // call は Slack Web API を 1 回呼ぶ。分類規則(スペック 8 章):
 //   - ネットワークエラー・5xx・429 → リトライ可能(sentinel を含まない)
-//   - それ以外の非 2xx・ok:false(未知のエラー文字列含む)→ notify.ErrNonRetryable
+//   - それ以外の非 2xx・ok:false(未知のエラー文字列含む)・200 だが JSON デコード失敗
+//     → notify.ErrNonRetryable
 func (c *Client) call(ctx context.Context, method string, payload any) (*apiResponse, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -103,10 +104,16 @@ func (c *Client) call(ctx context.Context, method string, payload any) (*apiResp
 	}
 	var ar apiResponse
 	if err := json.NewDecoder(resp.Body).Decode(&ar); err != nil {
-		return nil, fmt.Errorf("slack %s: decode: %w", method, err)
+		// 200 なのに JSON が壊れている経路(プロキシ等)は毎 tick 再試行しても
+		// 回復しないためリトライ不能に分類する(スペック 8 章)。
+		return nil, fmt.Errorf("slack %s: decode: %w: %w", method, err, notify.ErrNonRetryable)
 	}
 	if !ar.OK {
-		return nil, fmt.Errorf("slack %s: %s: %w", method, ar.Error, notify.ErrNonRetryable)
+		errMsg := ar.Error
+		if errMsg == "" {
+			errMsg = "unknown_error"
+		}
+		return nil, fmt.Errorf("slack %s: %s: %w", method, errMsg, notify.ErrNonRetryable)
 	}
 	return &ar, nil
 }

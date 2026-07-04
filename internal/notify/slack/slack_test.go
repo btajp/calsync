@@ -74,6 +74,18 @@ func TestAPIErrorsAreNonRetryable(t *testing.T) {
 	}
 }
 
+// 200 だが JSON として不正な応答(プロキシ等が返す壊れたボディ)は、再試行しても
+// 回復しないためリトライ不能に分類する(スペック 8 章)。
+func TestMalformed200BodyIsNonRetryable(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("not-json"))
+	})
+	err := c.SendReminder(context.Background(), sampleEntry(), time.Minute)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, notify.ErrNonRetryable))
+}
+
 // 429 / 5xx / ネットワークエラーはリトライ可能(sentinel を含まない)。
 func TestTransportErrorsAreRetryable(t *testing.T) {
 	for _, status := range []int{429, 500, 503} {

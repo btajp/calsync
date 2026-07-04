@@ -187,6 +187,7 @@ notifications:
   slack:
     bot_token_env: SLACK_BOT_TOKEN  # トークンを読む環境変数名(既定 SLACK_BOT_TOKEN)。トークン自体は YAML に書きません
     channel: "C0XXXXXXX"            # C…/G… ならチャンネル、U… なら DM(conversations.open で自動解決)
+                                     # Enterprise Grid のユーザー ID(W…)は v1 未対応(DM は U… のみ)
     morning_digest: "07:30"         # 省略するとダイジェスト無効。"HH:MM"、コンテナの TZ(reconcile_at と同形式)
     remind_before: 10m               # 省略するとリマインド無効。正の Go duration。poll_interval 以上が必須
 ```

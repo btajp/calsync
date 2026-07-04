@@ -134,6 +134,10 @@ accounts:
     provider: google
 `), 0o600))
 	t.Setenv("CALSYNC_TEST_SLACK_TOKEN", "")
+	// rootCmd.Execute() は package-level の flagConfig/flagData をパース結果で
+	// 書き換えたまま残す。他テストへの汚染を防ぐため実行前の値を保存し復元する。
+	prevConfig, prevData := flagConfig, flagData
+	t.Cleanup(func() { flagConfig, flagData = prevConfig, prevData })
 	rootCmd.SetArgs([]string{"run", "--config", cfgPath, "--data", t.TempDir()})
 	t.Cleanup(func() { rootCmd.SetArgs(nil) })
 	err := rootCmd.Execute()
