@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -61,12 +62,14 @@ func (c *Client) baseURL() string {
 	return "https://slack.com/api"
 }
 
+// Channel は json.RawMessage で受ける: chat.postMessage の成功応答は
+// "channel" が文字列("C123…")、conversations.open の成功応答はオブジェクト
+// ({"id":"D…"})で返る。共有の apiResponse で型を固定すると片方が
+// json.UnmarshalTypeError になるため、必要な側(channelID)だけで解釈する。
 type apiResponse struct {
-	OK      bool   `json:"ok"`
-	Error   string `json:"error"`
-	Channel struct {
-		ID string `json:"id"`
-	} `json:"channel"`
+	OK      bool            `json:"ok"`
+	Error   string          `json:"error"`
+	Channel json.RawMessage `json:"channel"`
 }
 
 // call は Slack Web API を 1 回呼ぶ。分類規則(スペック 8 章):
@@ -87,7 +90,11 @@ func (c *Client) call(ctx context.Context, method string, payload any) (*apiResp
 	if err != nil {
 		return nil, fmt.Errorf("slack %s: %w", method, err) // ネットワーク系 → リトライ可能
 	}
-	defer resp.Body.Close()
+	defer func() {
+		// keep-alive で接続を再利用できるよう、Close 前にボディを読み切る。
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 		return nil, fmt.Errorf("slack %s: status %d", method, resp.StatusCode) // リトライ可能
 	}
@@ -106,27 +113,35 @@ func (c *Client) call(ctx context.Context, method string, payload any) (*apiResp
 
 // channelID は投稿先チャンネル ID を返す。U… は初回のみ conversations.open で
 // DM チャンネルに解決し、プロセス存続中はキャッシュする(スペック 8 章)。
+//
+// このクライアントの送信頻度(digest/reminder のみ)では、解決からキャッシュ
+// 書き込みまで mutex を握りっぱなしにしても実害がない。sync.Once は失敗時に
+// 再試行できず失敗を永続キャッシュしてしまうため使わず、mutex で
+// resolve-or-fetch 全体を保護して TOCTOU(並行初回送信での二重 open)を防ぐ。
 func (c *Client) channelID(ctx context.Context) (string, error) {
 	if !strings.HasPrefix(c.Channel, "U") {
 		return c.Channel, nil
 	}
 	c.mu.Lock()
-	cached := c.resolved
-	c.mu.Unlock()
-	if cached != "" {
-		return cached, nil
+	defer c.mu.Unlock()
+	if c.resolved != "" {
+		return c.resolved, nil
 	}
 	ar, err := c.call(ctx, "conversations.open", map[string]string{"users": c.Channel})
 	if err != nil {
 		return "", err
 	}
-	if ar.Channel.ID == "" {
+	var ch struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(ar.Channel, &ch); err != nil {
+		return "", fmt.Errorf("slack conversations.open: decode channel: %w: %w", err, notify.ErrNonRetryable)
+	}
+	if ch.ID == "" {
 		return "", fmt.Errorf("slack conversations.open: empty channel id: %w", notify.ErrNonRetryable)
 	}
-	c.mu.Lock()
-	c.resolved = ar.Channel.ID
-	c.mu.Unlock()
-	return ar.Channel.ID, nil
+	c.resolved = ch.ID
+	return ch.ID, nil
 }
 
 func (c *Client) post(ctx context.Context, text string) error {

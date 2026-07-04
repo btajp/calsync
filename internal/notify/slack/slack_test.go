@@ -51,6 +51,17 @@ func TestSendReminderPostsMessage(t *testing.T) {
 	require.Contains(t, got.Text, "10分後")
 }
 
+// chat.postMessage の実 API 成功応答は "channel" が文字列で返る
+// (conversations.open はオブジェクト{"id":...})。共有デコードが
+// json.UnmarshalTypeError で失敗し送信成功なのにリトライ扱いになる回帰を防ぐ。
+func TestPostMessageChannelAsStringDecodesOK(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/chat.postMessage", r.URL.Path)
+		w.Write([]byte(`{"ok":true,"channel":"C123"}`))
+	})
+	require.NoError(t, c.SendReminder(context.Background(), sampleEntry(), time.Minute))
+}
+
 // ok:false は未知のエラー文字列も含め既定でリトライ不能(スペック 8 章)。
 func TestAPIErrorsAreNonRetryable(t *testing.T) {
 	for _, apiErr := range []string{"invalid_auth", "channel_not_found", "some_future_error"} {
@@ -79,6 +90,16 @@ func TestTransportErrorsAreRetryable(t *testing.T) {
 	err := c.SendReminder(context.Background(), sampleEntry(), time.Minute)
 	require.Error(t, err)
 	require.False(t, errors.Is(err, notify.ErrNonRetryable))
+}
+
+// 素の 4xx(429 を除く)は ok:false と同様にリトライ不能に分類する(スペック 8 章)。
+func TestPlainHTTPErrorIsNonRetryable(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	})
+	err := c.SendReminder(context.Background(), sampleEntry(), time.Minute)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, notify.ErrNonRetryable))
 }
 
 // U… は conversations.open で DM に解決し、プロセス存続中はキャッシュする(スペック 8 章)。
