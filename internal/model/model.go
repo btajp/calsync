@@ -21,6 +21,7 @@ type CalendarRef struct {
 type NormalizedEvent struct {
 	ID          string // プロバイダのイベントID(opaque。パース禁止)
 	ICalUID     string
+	Title       string // 件名(Slack 通知の表示専用。TimeHash には含めない — スペック 4.1)
 	StartUTC    time.Time
 	EndUTC      time.Time
 	IsAllDay    bool
