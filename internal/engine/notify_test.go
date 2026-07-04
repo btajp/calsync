@@ -182,3 +182,134 @@ func TestRunDigest(t *testing.T) {
 	require.Len(t, fn.digests, 1)
 	require.Equal(t, time.Date(2026, 7, 6, 7, 30, 0, 0, jstLoc).Unix(), next.Unix())
 }
+
+// reminderEngine は now を可変にしたリマインド用エンジン。
+func reminderEngine(t *testing.T) (*Engine, *fakeNotifier, *time.Time) {
+	t.Helper()
+	e, _ := newTestEngine(t)
+	fn := &fakeNotifier{}
+	e.Notifier = fn
+	e.Cfg.Notifications.Slack = &config.SlackConfig{Channel: "C1", RemindBefore: 10 * time.Minute}
+	now := time.Date(2026, 7, 5, 9, 50, 0, 0, time.UTC)
+	e.Now = func() time.Time { return now }
+	return e, fn, &now
+}
+
+func TestCheckRemindersSendsOncePersistently(t *testing.T) {
+	e, fn, _ := reminderEngine(t)
+	ctx := context.Background()
+	start := time.Date(2026, 7, 5, 10, 0, 0, 0, time.UTC) // ちょうど 10 分後(境界: 送信対象)
+	require.NoError(t, e.Store.UpsertEvent(refA, model.NormalizedEvent{
+		ID: "ev1", ICalUID: "u@x", Title: "設計レビュー",
+		StartUTC: start, EndUTC: start.Add(time.Hour), IsBusy: true,
+	}))
+
+	e.checkReminders(ctx)
+	require.Len(t, fn.reminders, 1)
+	require.Equal(t, "設計レビュー", fn.reminders[0].entry.Title)
+	require.Equal(t, 10*time.Minute, fn.reminders[0].lead)
+
+	// 同一 tick 再実行・再起動(新 Engine 値・同一 Store)でも再送しない
+	e.checkReminders(ctx)
+	require.Len(t, fn.reminders, 1)
+	e2 := &Engine{Store: e.Store, Providers: e.Providers, Cfg: e.Cfg, Now: e.Now, Notifier: fn}
+	e2.checkReminders(ctx)
+	require.Len(t, fn.reminders, 1)
+}
+
+func TestCheckRemindersWindowBoundaries(t *testing.T) {
+	e, fn, _ := reminderEngine(t)
+	ctx := context.Background()
+	// start == now は対象外(start_utc > now)
+	require.NoError(t, e.Store.UpsertEvent(refA, model.NormalizedEvent{
+		ID: "now", ICalUID: "n@x", StartUTC: time.Date(2026, 7, 5, 9, 50, 0, 0, time.UTC),
+		EndUTC: time.Date(2026, 7, 5, 10, 50, 0, 0, time.UTC), IsBusy: true,
+	}))
+	// 10 分 1 秒後は対象外
+	require.NoError(t, e.Store.UpsertEvent(refA, model.NormalizedEvent{
+		ID: "far", ICalUID: "f@x", StartUTC: time.Date(2026, 7, 5, 10, 0, 1, 0, time.UTC),
+		EndUTC: time.Date(2026, 7, 5, 11, 0, 1, 0, time.UTC), IsBusy: true,
+	}))
+	e.checkReminders(ctx)
+	require.Empty(t, fn.reminders)
+}
+
+func TestCheckRemindersDedupesSameMeeting(t *testing.T) {
+	e, fn, _ := reminderEngine(t)
+	ctx := context.Background()
+	start := time.Date(2026, 7, 5, 9, 55, 0, 0, time.UTC)
+	refB := model.CalendarRef{AccountID: "b", CalendarID: "primary"}
+	require.NoError(t, e.Store.UpsertEvent(refA, model.NormalizedEvent{
+		ID: "ev-a", ICalUID: "same@x", Title: "会議", StartUTC: start, EndUTC: start.Add(time.Hour), IsBusy: true,
+	}))
+	require.NoError(t, e.Store.UpsertEvent(refB, model.NormalizedEvent{
+		ID: "ev-b", ICalUID: "same@x", Title: "会議", StartUTC: start, EndUTC: start.Add(time.Hour), IsBusy: true,
+	}))
+
+	e.checkReminders(ctx)
+	require.Len(t, fn.reminders, 1) // 1 通のみ
+
+	// スキップした側も記録される(記録条件 (b)。スペック 6 章)
+	sentA, err := e.Store.WasReminderSent(refA, "ev-a", start)
+	require.NoError(t, err)
+	sentB, err := e.Store.WasReminderSent(refB, "ev-b", start)
+	require.NoError(t, err)
+	require.True(t, sentA && sentB)
+}
+
+func TestCheckRemindersRetryPolicy(t *testing.T) {
+	e, fn, _ := reminderEngine(t)
+	ctx := context.Background()
+	start := time.Date(2026, 7, 5, 9, 55, 0, 0, time.UTC)
+	require.NoError(t, e.Store.UpsertEvent(refA, model.NormalizedEvent{
+		ID: "ev1", ICalUID: "u@x", StartUTC: start, EndUTC: start.Add(time.Hour), IsBusy: true,
+	}))
+
+	// リトライ可能エラー → 未記録 → 次回再送
+	fn.failWith = errors.New("network down")
+	e.checkReminders(ctx)
+	require.Empty(t, fn.reminders)
+	e.checkReminders(ctx)
+	require.Len(t, fn.reminders, 1)
+
+	// リトライ不能エラー → 記録してログ 1 回(スペック 6 章)
+	start2 := time.Date(2026, 7, 5, 9, 56, 0, 0, time.UTC)
+	require.NoError(t, e.Store.UpsertEvent(refA, model.NormalizedEvent{
+		ID: "ev2", ICalUID: "v@x", StartUTC: start2, EndUTC: start2.Add(time.Hour), IsBusy: true,
+	}))
+	fn.failWith = fmt.Errorf("channel_not_found: %w", notify.ErrNonRetryable)
+	e.checkReminders(ctx)
+	require.Len(t, fn.reminders, 1) // 送れていない
+	sent, err := e.Store.WasReminderSent(refA, "ev2", start2)
+	require.NoError(t, err)
+	require.True(t, sent) // だが記録されている(以後試行しない)
+}
+
+func TestCheckRemindersNoopWhenDisabled(t *testing.T) {
+	e, _ := newTestEngine(t)
+	e.Notifier = nil
+	e.checkReminders(context.Background()) // panic しないこと
+}
+
+// Run は起動直後の初回 tick の後にもリマインド判定を行う(スペック 9 章の統合点 (4)。
+// PollInterval を 1 時間にし、ループ内 tick を待たずに送られることで検証する)。
+func TestRunChecksRemindersOnStartupTick(t *testing.T) {
+	e, fn, _ := reminderEngine(t)
+	e.Cfg.PollInterval = time.Hour
+	start := time.Date(2026, 7, 5, 9, 55, 0, 0, time.UTC) // now(9:50)+5分 → ウィンドウ内
+	require.NoError(t, e.Store.UpsertEvent(refA, model.NormalizedEvent{
+		ID: "ev1", ICalUID: "u@x", Title: "会議",
+		StartUTC: start, EndUTC: start.Add(time.Hour), IsBusy: true,
+	}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- e.Run(ctx) }()
+	require.Eventually(t, func() bool {
+		fn.mu.Lock()
+		defer fn.mu.Unlock()
+		return len(fn.reminders) == 1
+	}, 2*time.Second, 10*time.Millisecond)
+	cancel()
+	require.NoError(t, <-done)
+}

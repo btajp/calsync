@@ -54,18 +54,18 @@ func (e *Engine) runDigest(ctx context.Context, scheduled time.Time) time.Time {
 	nowDay := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), 0, 0, 0, 0, scheduled.Location())
 	if nowDay.After(day) {
 		log.Printf("digest: abandoning stale digest for %s", day.Format("2006-01-02"))
-		return nextReconcileAt(now, hhmm)
+		return nextDailyAt(now, hhmm)
 	}
 	entries, failed := e.collectDigest(ctx, day)
 	if err := e.Notifier.SendDigest(ctx, day, entries, failed); err != nil {
 		if errors.Is(err, notify.ErrNonRetryable) {
 			log.Printf("digest: %v (non-retryable; skipping until tomorrow)", err)
-			return nextReconcileAt(now, hhmm)
+			return nextDailyAt(now, hhmm)
 		}
 		log.Printf("digest: %v (retrying next tick)", err)
 		return scheduled
 	}
-	return nextReconcileAt(now, hhmm)
+	return nextDailyAt(now, hhmm)
 }
 
 // collectDigest は対象日 day(そのローカル TZ の 00:00)の実予定をライブ取得で
@@ -181,6 +181,74 @@ func (e *Engine) appendDigestEntry(entries *[]DigestEntry, byKey map[string]int,
 	}
 	byKey[key] = len(*entries)
 	*entries = append(*entries, entry)
+}
+
+// checkReminders は毎 tick(同期処理の後 — キャッシュが最新の状態で)、開始が
+// リマインドウィンドウに入った未通知イベントへリマインドを送る(スペック 6 章)。
+// 記録条件は (a) 送信成功時 (b) dedupe により送信不要と確定した時。
+// リトライ可能エラーは未記録のまま次 tick で自然リトライされ、開始時刻を過ぎると
+// 抽出条件から外れて自然に止まる。リトライ不能エラーは記録してログ 1 回に留める。
+func (e *Engine) checkReminders(ctx context.Context) {
+	if e.Notifier == nil {
+		return
+	}
+	sc := e.Cfg.Notifications.Slack
+	if sc == nil || sc.RemindBefore <= 0 {
+		return
+	}
+	now := e.now()
+	ups, err := e.Store.ListUpcomingEvents(now, sc.RemindBefore)
+	if err != nil {
+		log.Printf("reminders: %v", err)
+		return
+	}
+	for _, u := range ups {
+		if ctx.Err() != nil {
+			return
+		}
+		sent, err := e.Store.WasReminderSent(u.Ref, u.EventID, u.StartUTC)
+		if err != nil {
+			log.Printf("reminder %s/%s: %v", u.Ref, u.EventID, err)
+			continue
+		}
+		if sent {
+			continue
+		}
+		if e.Cfg.DedupeSameMeeting {
+			dup, err := e.Store.HasReminderForICalUID(u.ICalUID, u.StartUTC)
+			if err != nil {
+				log.Printf("reminder %s/%s: %v", u.Ref, u.EventID, err)
+				continue
+			}
+			if dup {
+				// 送信せず自分も記録する(以後の照会を単純化。スペック 6 章の記録条件 (b))
+				if merr := e.Store.MarkReminderSent(u.Ref, u.EventID, u.ICalUID, u.StartUTC, now); merr != nil {
+					log.Printf("reminder %s/%s: mark: %v", u.Ref, u.EventID, merr)
+				}
+				continue
+			}
+		}
+		entry := DigestEntry{
+			Title:      u.Title,
+			StartUTC:   u.StartUTC,
+			EndUTC:     u.EndUTC,
+			AccountIDs: []string{u.Ref.AccountID},
+		}
+		if err := e.Notifier.SendReminder(ctx, entry, u.StartUTC.Sub(now)); err != nil {
+			if errors.Is(err, notify.ErrNonRetryable) {
+				log.Printf("reminder %s/%s: %v (non-retryable; giving up)", u.Ref, u.EventID, err)
+				if merr := e.Store.MarkReminderSent(u.Ref, u.EventID, u.ICalUID, u.StartUTC, now); merr != nil {
+					log.Printf("reminder %s/%s: mark: %v", u.Ref, u.EventID, merr)
+				}
+				continue
+			}
+			log.Printf("reminder %s/%s: %v (retrying next tick)", u.Ref, u.EventID, err)
+			continue
+		}
+		if merr := e.Store.MarkReminderSent(u.Ref, u.EventID, u.ICalUID, u.StartUTC, now); merr != nil {
+			log.Printf("reminder %s/%s: mark: %v", u.Ref, u.EventID, merr)
+		}
+	}
 }
 
 // sortDigestEntries は終日を先頭に、次いで開始時刻昇順・件名で並べる(決定的)。

@@ -17,7 +17,7 @@ import (
 	"github.com/btajp/calsync/internal/store"
 )
 
-func TestNextReconcileAt(t *testing.T) {
+func TestNextDailyAt(t *testing.T) {
 	jst := time.FixedZone("JST", 9*3600)
 	tests := []struct {
 		name string
@@ -58,7 +58,7 @@ func TestNextReconcileAt(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := nextReconcileAt(tt.now, tt.hhmm)
+			got := nextDailyAt(tt.now, tt.hhmm)
 			require.True(t, got.Equal(tt.want), "got %v want %v", got, tt.want)
 		})
 	}
