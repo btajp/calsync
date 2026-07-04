@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/work-a-co/calsync/internal/config"
-	"github.com/work-a-co/calsync/internal/model"
-	"github.com/work-a-co/calsync/internal/provider"
-	"github.com/work-a-co/calsync/internal/store"
+	"github.com/btajp/calsync/internal/config"
+	"github.com/btajp/calsync/internal/model"
+	"github.com/btajp/calsync/internal/provider"
+	"github.com/btajp/calsync/internal/store"
 )
 
 // FullResync は 1 カレンダーに対するカーソル張り直し + set-difference リコンサイル

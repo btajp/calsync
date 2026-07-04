@@ -10,8 +10,8 @@ import (
 	calendar "google.golang.org/api/calendar/v3"
 	"google.golang.org/api/googleapi"
 
-	"github.com/work-a-co/calsync/internal/model"
-	"github.com/work-a-co/calsync/internal/provider"
+	"github.com/btajp/calsync/internal/model"
+	"github.com/btajp/calsync/internal/provider"
 )
 
 // Provider の全メソッドが揃う本ファイルで、コンパイル時に実装を保証する。

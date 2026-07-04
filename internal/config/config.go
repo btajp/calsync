@@ -10,7 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/work-a-co/calsync/internal/model"
+	"github.com/btajp/calsync/internal/model"
 )
 
 type Config struct {

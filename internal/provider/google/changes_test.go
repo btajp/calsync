@@ -13,8 +13,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/work-a-co/calsync/internal/model"
-	"github.com/work-a-co/calsync/internal/provider"
+	"github.com/btajp/calsync/internal/model"
+	"github.com/btajp/calsync/internal/provider"
 )
 
 var (

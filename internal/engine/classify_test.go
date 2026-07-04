@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/work-a-co/calsync/internal/model"
+	"github.com/btajp/calsync/internal/model"
 )
 
 // ShouldBlock の真理値表: IsBusy / IsDeclined / Deleted の全 8 組合せ。

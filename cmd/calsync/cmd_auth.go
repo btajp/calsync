@@ -8,8 +8,8 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
 
-	"github.com/work-a-co/calsync/internal/auth"
-	"github.com/work-a-co/calsync/internal/config"
+	"github.com/btajp/calsync/internal/auth"
+	"github.com/btajp/calsync/internal/config"
 )
 
 var (

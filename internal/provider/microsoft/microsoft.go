@@ -15,7 +15,7 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"github.com/work-a-co/calsync/internal/provider"
+	"github.com/btajp/calsync/internal/provider"
 )
 
 const defaultBaseURL = "https://graph.microsoft.com/v1.0"

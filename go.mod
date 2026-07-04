@@ -1,4 +1,4 @@
-module github.com/work-a-co/calsync
+module github.com/btajp/calsync
 
 go 1.25.8
 
