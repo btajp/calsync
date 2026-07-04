@@ -20,8 +20,8 @@ func boolToInt(b bool) int {
 func (s *Store) UpsertEvent(ref model.CalendarRef, ev model.NormalizedEvent) error {
 	_, err := s.db.Exec(`
 INSERT INTO events (account_id, calendar_id, event_id, ical_uid, start_utc, end_utc,
-                    is_all_day, all_day_start, all_day_end, time_hash)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    is_all_day, all_day_start, all_day_end, time_hash, title)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (account_id, calendar_id, event_id) DO UPDATE SET
   ical_uid      = excluded.ical_uid,
   start_utc     = excluded.start_utc,
@@ -29,11 +29,12 @@ ON CONFLICT (account_id, calendar_id, event_id) DO UPDATE SET
   is_all_day    = excluded.is_all_day,
   all_day_start = excluded.all_day_start,
   all_day_end   = excluded.all_day_end,
-  time_hash     = excluded.time_hash`,
+  time_hash     = excluded.time_hash,
+  title         = excluded.title`,
 		ref.AccountID, ref.CalendarID, ev.ID, ev.ICalUID,
 		ev.StartUTC.UTC().Unix(), ev.EndUTC.UTC().Unix(),
 		boolToInt(ev.IsAllDay), ev.AllDayStart, ev.AllDayEnd,
-		model.TimeHash(ev))
+		model.TimeHash(ev), ev.Title)
 	return err
 }
 
@@ -41,15 +42,15 @@ ON CONFLICT (account_id, calendar_id, event_id) DO UPDATE SET
 // キャッシュには busy イベントのみ入る契約のため IsBusy=true で復元する。
 func (s *Store) GetEvent(ref model.CalendarRef, eventID string) (*model.NormalizedEvent, error) {
 	row := s.db.QueryRow(`
-SELECT ical_uid, start_utc, end_utc, is_all_day, all_day_start, all_day_end
+SELECT ical_uid, start_utc, end_utc, is_all_day, all_day_start, all_day_end, title
 FROM events WHERE account_id = ? AND calendar_id = ? AND event_id = ?`,
 		ref.AccountID, ref.CalendarID, eventID)
 	var (
-		icalUID, adStart, adEnd sql.NullString
-		startUTC, endUTC        sql.NullInt64
-		isAllDay                int
+		icalUID, adStart, adEnd, title sql.NullString
+		startUTC, endUTC               sql.NullInt64
+		isAllDay                       int
 	)
-	err := row.Scan(&icalUID, &startUTC, &endUTC, &isAllDay, &adStart, &adEnd)
+	err := row.Scan(&icalUID, &startUTC, &endUTC, &isAllDay, &adStart, &adEnd, &title)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -59,6 +60,7 @@ FROM events WHERE account_id = ? AND calendar_id = ? AND event_id = ?`,
 	ev := &model.NormalizedEvent{
 		ID:          eventID,
 		ICalUID:     icalUID.String,
+		Title:       title.String,
 		IsAllDay:    isAllDay != 0,
 		AllDayStart: adStart.String,
 		AllDayEnd:   adEnd.String,

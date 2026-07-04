@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS events (
   all_day_start TEXT,
   all_day_end   TEXT,
   time_hash     TEXT NOT NULL,
+  title         TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (account_id, calendar_id, event_id)
 );
 CREATE INDEX IF NOT EXISTS idx_events_icaluid ON events (ical_uid, start_utc);
@@ -67,6 +69,18 @@ CREATE TABLE IF NOT EXISTS mappings (
 );
 CREATE INDEX IF NOT EXISTS idx_mappings_blocker ON mappings (target_account, blocker_event_id);
 `
+
+// migrate は既存 DB への後方互換の列追加を行う。方針(スペック 4.2):
+// 新規 DB は const schema、既存 DB は Open 時の冪等 ALTER(duplicate column のみ無視)。
+// schema version 管理は導入しない。
+func migrate(db *sql.DB) error {
+	if _, err := db.Exec(`ALTER TABLE events ADD COLUMN title TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("add events.title: %w", err)
+		}
+	}
+	return nil
+}
 
 // Open はデータディレクトリの flock を取得し(失敗は ErrLocked)、
 // WAL モードで SQLite を開いてスキーマを migrate する。
@@ -105,6 +119,11 @@ func Open(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("journal_mode is %q, want wal", mode)
 	}
 	if _, err := db.Exec(schema); err != nil {
+		_ = db.Close()
+		_ = lock.Unlock()
+		return nil, fmt.Errorf("migrate schema: %w", err)
+	}
+	if err := migrate(db); err != nil {
 		_ = db.Close()
 		_ = lock.Unlock()
 		return nil, fmt.Errorf("migrate schema: %w", err)
