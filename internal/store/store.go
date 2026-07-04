@@ -68,6 +68,17 @@ CREATE TABLE IF NOT EXISTS mappings (
   PRIMARY KEY (origin_account, origin_calendar, origin_event_id, target_account)
 );
 CREATE INDEX IF NOT EXISTS idx_mappings_blocker ON mappings (target_account, blocker_event_id);
+
+CREATE TABLE IF NOT EXISTS reminders_sent (
+  account_id  TEXT NOT NULL,
+  calendar_id TEXT NOT NULL,
+  event_id    TEXT NOT NULL,
+  start_utc   INTEGER NOT NULL,
+  ical_uid    TEXT NOT NULL DEFAULT '',
+  sent_at     INTEGER NOT NULL,
+  PRIMARY KEY (account_id, calendar_id, event_id, start_utc)
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_sent_icaluid ON reminders_sent (ical_uid, start_utc);
 `
 
 // migrate は既存 DB への後方互換の列追加を行う。方針(スペック 4.2):
