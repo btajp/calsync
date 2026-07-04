@@ -230,6 +230,20 @@ func TestNormalizeDeltaEvent(t *testing.T) {
 	}
 }
 
+func TestNormalizeDeltaEventTitle(t *testing.T) {
+	busy := map[string]bool{"busy": true}
+	de := deltaEvent{
+		ID:      "ev1",
+		Subject: "設計レビュー",
+		ShowAs:  "busy",
+		Start:   &graphTime{DateTime: "2026-07-10T01:00:00.0000000", TimeZone: "UTC"},
+		End:     &graphTime{DateTime: "2026-07-10T02:00:00.0000000", TimeZone: "UTC"},
+	}
+	got, err := normalizeDeltaEvent(de, busy)
+	require.NoError(t, err)
+	require.Equal(t, "設計レビュー", got.Title)
+}
+
 func TestChangesCursorInvalid(t *testing.T) {
 	tests := []struct {
 		name        string

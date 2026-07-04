@@ -79,6 +79,7 @@ func normalizeEvent(item *calendar.Event) model.NormalizedEvent {
 		return ev
 	}
 	ev.ICalUID = item.ICalUID
+	ev.Title = item.Summary
 	ev.IsBusy = item.Transparency != "transparent"
 	for _, a := range item.Attendees {
 		if a != nil && a.Self && a.ResponseStatus == "declined" {

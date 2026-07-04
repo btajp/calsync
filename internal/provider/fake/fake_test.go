@@ -292,6 +292,17 @@ func TestGetCalendarTimezone(t *testing.T) {
 	require.Equal(t, "Asia/Tokyo", tz)
 }
 
+// fake は実プロバイダと同じ契約で Title を保持・返却する(スペック 4.1)。
+func TestChangesPreservesTitle(t *testing.T) {
+	f := fake.New()
+	cal := model.CalendarRef{AccountID: "a", CalendarID: "primary"}
+	f.SetFullState(cal, []model.NormalizedEvent{{ID: "ev1", Title: "設計レビュー", IsBusy: true}})
+	evs, _, err := f.Changes(context.Background(), cal, "", model.Window{})
+	require.NoError(t, err)
+	require.Len(t, evs, 1)
+	require.Equal(t, "設計レビュー", evs[0].Title)
+}
+
 func TestFakeImplementsProvider(t *testing.T) {
 	var p provider.Provider = fake.New()
 	require.NotNil(t, p)
