@@ -25,7 +25,7 @@ func TestFormatDigest(t *testing.T) {
 		entry("設計レビュー", time.Date(2026, 7, 5, 10, 0, 0, 0, jst), time.Date(2026, 7, 5, 11, 0, 0, 0, jst), "work-ms", "personal"),
 	}
 	got := formatDigest(digestDay, entries, nil, jst)
-	want := "📅 7/5(日) の予定\n" +
+	want := "*7/5(日) の予定*\n" +
 		"・(終日) 社内イベント [work-google]\n" +
 		"・09:00–09:30 朝会 [work-google]\n" +
 		"・10:00–11:00 設計レビュー [work-ms, personal]"

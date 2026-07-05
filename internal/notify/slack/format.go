@@ -56,7 +56,8 @@ func timeRange(e engine.DigestEntry, day time.Time, loc *time.Location) string {
 func formatDigest(day time.Time, entries []engine.DigestEntry, failedAccounts []string, loc *time.Location) string {
 	var b strings.Builder
 	d := day.In(loc)
-	fmt.Fprintf(&b, "📅 %d/%d(%s) の予定\n", int(d.Month()), d.Day(), jaWeekdays[d.Weekday()])
+	// 見出しは絵文字なしの太字(mrkdwn)。📅 は日付入りアイコンに見え誤認を招くため使わない
+	fmt.Fprintf(&b, "*%d/%d(%s) の予定*\n", int(d.Month()), d.Day(), jaWeekdays[d.Weekday()])
 	if len(entries) == 0 {
 		// 0 件の日も送る(デーモンの生存確認を兼ねる。スペック 5 章)
 		b.WriteString("今日の予定はありません\n")

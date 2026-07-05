@@ -144,7 +144,7 @@ flowchart TB
 時刻はコンテナ TZ、アカウント表示は YAML の `id`(email は出さない — #7 と同方針)。
 
 ```
-📅 7/5(日) の予定
+*7/5(日) の予定*
 ・(終日) 社内イベント [work-google]
 ・09:00–09:30 朝会 [work-google]
 ・10:00–11:00 設計レビュー [work-ms, personal]
