@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	calendar "google.golang.org/api/calendar/v3"
 
 	"github.com/btajp/calsync/internal/model"
 	"github.com/btajp/calsync/internal/provider"
@@ -313,4 +314,19 @@ func TestChangesNormalization(t *testing.T) {
 			require.Equal(t, tc.want, events[0])
 		})
 	}
+}
+
+func TestNormalizeEventTitle(t *testing.T) {
+	ev := normalizeEvent(&calendar.Event{
+		Id:      "ev1",
+		Summary: "設計レビュー",
+		Start:   &calendar.EventDateTime{DateTime: "2026-07-10T01:00:00Z"},
+		End:     &calendar.EventDateTime{DateTime: "2026-07-10T02:00:00Z"},
+	})
+	require.Equal(t, "設計レビュー", ev.Title)
+
+	// cancelled は ID 以外を保証しない既存契約のまま(Title も空)
+	del := normalizeEvent(&calendar.Event{Id: "ev2", Status: "cancelled", Summary: "x"})
+	require.True(t, del.Deleted)
+	require.Equal(t, "", del.Title)
 }

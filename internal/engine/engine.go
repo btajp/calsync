@@ -19,6 +19,7 @@ type Engine struct {
 	Providers map[string]provider.Provider // key: account ID
 	Cfg       *config.Config
 	Now       func() time.Time // テストで固定する。nil なら time.Now
+	Notifier  Notifier         // nil なら通知無効(cmd_run のみが注入する)
 }
 
 func (e *Engine) now() time.Time {
@@ -450,6 +451,9 @@ func RemoveAccount(ctx context.Context, e *Engine, tokens TokenDeleter, accountI
 		return err
 	}
 	if err := e.Store.DeleteCalendarsForAccount(accountID); err != nil {
+		return err
+	}
+	if err := e.Store.DeleteRemindersForAccount(accountID); err != nil {
 		return err
 	}
 	return tokens.Delete(accountID)

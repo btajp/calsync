@@ -8,11 +8,12 @@ import (
 	"github.com/btajp/calsync/internal/model"
 )
 
-// nextReconcileAt は now と同じロケーションで、hhmm("15:04" 形式)が指す直近の
-// 未来時刻を返す。当日の hhmm が now より未来ならその日、now 以前なら翌日。
+// nextDailyAt は now と同じロケーションで、hhmm("15:04" 形式)が指す直近の
+// 未来時刻を返す(reconcile_at / morning_digest 共用の nextAt 方式)。
+// 当日の hhmm が now より未来ならその日、now 以前なら翌日。
 // hhmm が不正な場合は既定の "04:00" にフォールバックする(config 側の検証が正、
 // ここは防御的フォールバック)。
-func nextReconcileAt(now time.Time, hhmm string) time.Time {
+func nextDailyAt(now time.Time, hhmm string) time.Time {
 	parsed, err := time.Parse("15:04", hhmm)
 	if err != nil {
 		parsed, _ = time.Parse("15:04", "04:00")
@@ -42,12 +43,18 @@ const consecutiveFailureResyncThreshold = 5
 func (e *Engine) Run(ctx context.Context) error {
 	reauth := make(map[string]bool)             // account ID -> reauth_required
 	failures := make(map[model.CalendarRef]int) // 連続同期失敗回数
-	next := nextReconcileAt(e.now(), e.Cfg.ReconcileAt)
+	next := nextDailyAt(e.now(), e.Cfg.ReconcileAt)
+	var nextDigest time.Time
+	if hhmm := e.digestAt(); hhmm != "" {
+		nextDigest = nextDailyAt(e.now(), hhmm)
+	}
 	ticker := time.NewTicker(e.Cfg.PollInterval)
 	defer ticker.Stop()
 
 	// 起動直後に 1 ティック実行(初回同期をポーリング間隔まで待たせない)
 	e.tick(ctx, reauth, failures)
+	// 初回 tick の直後にもリマインド判定(再起動直後の通知を 1 tick 遅らせない。スペック 9 章)
+	e.checkReminders(ctx)
 
 	for {
 		select {
@@ -55,17 +62,23 @@ func (e *Engine) Run(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 		}
+		// ダイジェストは reconcile より先に判定する(同一 tick で両方期限到来時に
+		// reconcile の所要時間でダイジェストを遅らせない。スペック 5 章)
+		if !nextDigest.IsZero() && !e.now().Before(nextDigest) {
+			nextDigest = e.runDigest(ctx, nextDigest)
+		}
 		if !e.now().Before(next) {
 			if err := e.Reconcile(ctx); err != nil {
 				log.Printf("reconcile: %v", err)
 			}
-			next = nextReconcileAt(e.now(), e.Cfg.ReconcileAt)
+			next = nextDailyAt(e.now(), e.Cfg.ReconcileAt)
 			// 日次リコンサイルのタイミングで reauth スキップを解除し再試行する
 			// (再認証済みなら次のティックから自動バックフィルされる)
 			reauth = make(map[string]bool)
 			failures = make(map[model.CalendarRef]int)
 		}
 		e.tick(ctx, reauth, failures)
+		e.checkReminders(ctx)
 	}
 }
 

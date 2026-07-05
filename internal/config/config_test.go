@@ -217,6 +217,77 @@ accounts:
 `,
 			wantErr: "field callendars not found",
 		},
+		{
+			name: "slack notifications parsed with defaults",
+			yaml: minimalYAML + `
+notifications:
+  slack:
+    channel: "C0123"
+    morning_digest: "07:30"
+    remind_before: 10m
+`,
+			check: func(t *testing.T, c *Config) {
+				sc := c.Notifications.Slack
+				require.NotNil(t, sc)
+				require.Equal(t, "SLACK_BOT_TOKEN", sc.BotTokenEnv)
+				require.Equal(t, "C0123", sc.Channel)
+				require.Equal(t, "07:30", sc.MorningDigest)
+				require.Equal(t, 10*time.Minute, sc.RemindBefore)
+			},
+		},
+		{
+			name: "slack custom bot_token_env and digest-only",
+			yaml: minimalYAML + `
+notifications:
+  slack:
+    bot_token_env: MY_SLACK_TOKEN
+    channel: "U0456"
+    morning_digest: "06:00"
+`,
+			check: func(t *testing.T, c *Config) {
+				sc := c.Notifications.Slack
+				require.NotNil(t, sc)
+				require.Equal(t, "MY_SLACK_TOKEN", sc.BotTokenEnv)
+				require.Equal(t, time.Duration(0), sc.RemindBefore)
+			},
+		},
+		{
+			name: "no notifications section means disabled",
+			yaml: minimalYAML,
+			check: func(t *testing.T, c *Config) {
+				require.Nil(t, c.Notifications.Slack)
+			},
+		},
+		{
+			name:    "slack requires channel",
+			yaml:    minimalYAML + "\nnotifications:\n  slack:\n    morning_digest: \"07:30\"\n",
+			wantErr: "notifications.slack.channel is required",
+		},
+		{
+			name:    "slack rejects invalid morning_digest",
+			yaml:    minimalYAML + "\nnotifications:\n  slack:\n    channel: \"C1\"\n    morning_digest: \"7時半\"\n",
+			wantErr: "invalid notifications.slack.morning_digest",
+		},
+		{
+			name:    "slack rejects non-positive remind_before",
+			yaml:    minimalYAML + "\nnotifications:\n  slack:\n    channel: \"C1\"\n    remind_before: -5m\n",
+			wantErr: "invalid notifications.slack.remind_before",
+		},
+		{
+			name:    "slack rejects remind_before shorter than poll_interval",
+			yaml:    "poll_interval: 5m\n" + minimalYAML + "\nnotifications:\n  slack:\n    channel: \"C1\"\n    remind_before: 1m\n",
+			wantErr: "must be >= poll_interval",
+		},
+		{
+			name:    "slack requires at least one of digest or remind",
+			yaml:    minimalYAML + "\nnotifications:\n  slack:\n    channel: \"C1\"\n",
+			wantErr: "set at least one of morning_digest or remind_before",
+		},
+		{
+			name:    "unknown notification keys are rejected",
+			yaml:    minimalYAML + "\nnotifications:\n  slack:\n    channel: \"C1\"\n    morning_digest: \"07:30\"\n    webhook_url: \"https://x\"\n",
+			wantErr: "webhook_url",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

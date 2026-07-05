@@ -29,6 +29,7 @@ type deltaEvent struct {
 	ID             string               `json:"id"`
 	Removed        *deltaRemoved        `json:"@removed"`
 	ICalUID        string               `json:"iCalUId"`
+	Subject        string               `json:"subject"`
 	IsCancelled    bool                 `json:"isCancelled"`
 	IsAllDay       bool                 `json:"isAllDay"`
 	ShowAs         string               `json:"showAs"`
@@ -120,6 +121,9 @@ func normalizeDeltaEvent(de deltaEvent, busyShowAs map[string]bool) (model.Norma
 		ev.Deleted = true
 		return ev, nil
 	}
+	// NOTE: delta 応答に subject が含まれることはユニット(フィクスチャ)で検証済み。
+	// 実 API の応答は初回稼働時に要実測(スペック 13 章スパイク 1)
+	ev.Title = de.Subject
 	ev.IsBusy = busyShowAs[de.ShowAs]
 	if de.ResponseStatus != nil && de.ResponseStatus.Response == "declined" {
 		ev.IsDeclined = true

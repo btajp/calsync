@@ -748,3 +748,23 @@ func TestReconcile_CleansActiveMappingsWithDeadOrigins(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, m, "origin 消滅の mapping は削除される")
 }
+
+// 日次リコンサイルが reminders_sent の古い行(start_utc < now-48h)を掃除する(スペック 4.3)。
+func TestReconcileCleansOldReminderRecords(t *testing.T) {
+	e, _ := newTestEngine(t)
+	ctx := context.Background()
+	now := e.now()
+	old := now.Add(-72 * time.Hour)
+	recent := now.Add(-time.Hour)
+	require.NoError(t, e.Store.MarkReminderSent(refA, "old", "o@x", old, old))
+	require.NoError(t, e.Store.MarkReminderSent(refA, "recent", "r@x", recent, recent))
+
+	require.NoError(t, e.Reconcile(ctx))
+
+	sent, err := e.Store.WasReminderSent(refA, "old", old)
+	require.NoError(t, err)
+	require.False(t, sent)
+	sent, err = e.Store.WasReminderSent(refA, "recent", recent)
+	require.NoError(t, err)
+	require.True(t, sent)
+}

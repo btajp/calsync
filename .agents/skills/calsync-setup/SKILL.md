@@ -78,6 +78,17 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 - コンテナ稼働中の状態確認は `docker compose logs` と `docker exec calsync /calsync status --config /data/calsync.yaml --data /data`。**コンテナ稼働中はホストから data/ の SQLite に一切触れない(読み取りの sqlite3 も禁止 — WAL は VM 境界を跨げず DB 破損の実績あり)。書き込み系コマンドはコンテナ停止中のみ**
 - アカウントを後から追加する場合: 認可(Step 4)はホストで行い、コンテナを再起動
 
+## Step 7: Slack 通知のセットアップ(オプション)
+
+朝のダイジェスト・開始前リマインドを使いたい場合のみ。`notifications.slack` を設定しなければ通知機能は完全に無効なので、不要ならこの節はスキップしてよい。
+
+1. [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch** で Slack App を作成する
+2. **OAuth & Permissions** → **Bot Token Scopes** に追加: `chat:write`(必須)/ `im:write`(DM 宛てなら必須)/ `chat:write.public`(Bot 未参加の公開チャンネル宛てなら必須)
+3. **Install to Workspace** を実行し、`xoxb-` から始まる Bot User OAuth Token を控える。**トークンは `calsync.yaml` に書かず、`.env`(コミット禁止)経由で `SLACK_BOT_TOKEN` 環境変数として渡す**(compose の `environment` に `SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}` を追記)
+4. `channel` の調べ方: チャンネル宛てはチャンネル詳細画面の一番下にある Channel ID(`C…`/`G…`)、DM 宛てはユーザーのプロフィール →「その他」→ **メンバー ID をコピー**(`U…`)
+5. **プライベートチャンネル宛ての場合は、そのチャンネルで `/invite @<App名>` して Bot を招待する**(招待し忘れると送信時に `not_in_channel` エラーになる)
+6. `calsync.yaml` に `notifications.slack`(`bot_token_env` / `channel` / `morning_digest` / `remind_before`。両方省略はエラー)を追記し、`calsync run` を起動する。トークン検証は起動時のみ行われる
+
 ## トラブルシューティング早見
 
 | 症状 | 原因と対処 |

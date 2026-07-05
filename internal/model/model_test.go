@@ -121,6 +121,23 @@ func TestCalendarRefString(t *testing.T) {
 	require.Equal(t, "acct-a/primary", CalendarRef{AccountID: "acct-a", CalendarID: "primary"}.String())
 }
 
+// Title は通知表示専用であり、TimeHash(ブロッカー変更検出)に影響してはならない
+// (スペック 4.1。件名変更でブロッカー更新が走ると Graph/Google への無駄な PATCH が出る)。
+func TestTimeHashIgnoresTitle(t *testing.T) {
+	base := NormalizedEvent{
+		StartUTC: time.Date(2026, 7, 10, 1, 0, 0, 0, time.UTC),
+		EndUTC:   time.Date(2026, 7, 10, 2, 0, 0, 0, time.UTC),
+	}
+	titled := base
+	titled.Title = "設計レビュー"
+	require.Equal(t, TimeHash(base), TimeHash(titled))
+
+	allday := NormalizedEvent{IsAllDay: true, AllDayStart: "2026-07-10", AllDayEnd: "2026-07-11"}
+	alldayTitled := allday
+	alldayTitled.Title = "終日イベント"
+	require.Equal(t, TimeHash(allday), TimeHash(alldayTitled))
+}
+
 func TestWindowContains(t *testing.T) {
 	w := Window{
 		Start: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),

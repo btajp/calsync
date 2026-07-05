@@ -6,6 +6,9 @@ services:
     environment:
       # reconcile_at("04:00" 等)はこの TZ で解釈される(仕様: コンテナのローカル TZ)
       TZ: Asia/Tokyo
+      # Slack Bot トークンの受け渡し(calsync.yaml の notifications.slack.bot_token_env と
+      # 同じ変数名にする。未設定なら空 = 通知を設定していなければ影響なし)
+      SLACK_TOKEN_CALSYNC: ${SLACK_TOKEN_CALSYNC:-}
     volumes:
       # calsync.yaml / SQLite / OAuth トークン / GCP クライアント JSON をここに置く
       - ./data:/data

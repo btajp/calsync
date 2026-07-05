@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -115,6 +117,32 @@ func TestRunDoctorAllOK(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, runDoctor(context.Background(), cfg, dir, probe, &out, "calsync.yaml"))
 	require.Contains(t, out.String(), "all checks passed")
+}
+
+// Slack 設定があるのにトークン環境変数が空なら、store を開く前に fail fast する
+// (スペック 9 章。status/doctor は環境変数なしで動くため run のみで検証する)。
+func TestRunFailsFastWhenSlackTokenMissing(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "calsync.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`
+notifications:
+  slack:
+    bot_token_env: CALSYNC_TEST_SLACK_TOKEN
+    channel: "C123"
+    morning_digest: "07:30"
+accounts:
+  - id: a
+    provider: google
+`), 0o600))
+	t.Setenv("CALSYNC_TEST_SLACK_TOKEN", "")
+	// rootCmd.Execute() は package-level の flagConfig/flagData をパース結果で
+	// 書き換えたまま残す。他テストへの汚染を防ぐため実行前の値を保存し復元する。
+	prevConfig, prevData := flagConfig, flagData
+	t.Cleanup(func() { flagConfig, flagData = prevConfig, prevData })
+	rootCmd.SetArgs([]string{"run", "--config", cfgPath, "--data", t.TempDir()})
+	t.Cleanup(func() { rootCmd.SetArgs(nil) })
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "CALSYNC_TEST_SLACK_TOKEN")
 }
 
 func TestOauthConfigForMicrosoftUsesLocalhostRedirect(t *testing.T) {
