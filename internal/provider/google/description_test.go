@@ -14,7 +14,7 @@ func TestStripHTML(t *testing.T) {
 		{"anchor tag removed keeping text", `<a href="https://zoom.us/j/1">参加</a>`, "参加"},
 		{"entities unescaped", "A &amp; B &lt;C&gt;", "A & B <C>"},
 		{"mixed", `会議<br><a href="https://x">リンク</a>&nbsp;end`, "会議\nリンク end"},
-		{"raw NBSP without any markup", "会議室 B", "会議室 B"},
+		{"raw NBSP without any markup", "会議室\u00a0B", "会議室 B"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

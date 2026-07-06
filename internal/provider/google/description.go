@@ -19,12 +19,14 @@ var (
 // 表示専用の正規化であり同期ロジック(TimeHash 等)には影響しない。
 // 生 NBSP のみの本文も正規化対象。
 func stripHTML(s string) string {
-	if !strings.ContainsAny(s, "<& ") {
+	// NBSP は \u00a0 のエスケープ表記で扱う(生バイトはエディタ・コピペで ASCII
+	// スペースに化けやすく、化けると生 NBSP 本文がこのガードを素通りする)
+	if !strings.ContainsAny(s, "<&\u00a0") {
 		return s
 	}
 	s = brTagRe.ReplaceAllString(s, "\n")
 	s = anyTagRe.ReplaceAllString(s, "")
 	s = html.UnescapeString(s)
-	s = strings.ReplaceAll(s, " ", " ")
+	s = strings.ReplaceAll(s, "\u00a0", " ")
 	return strings.TrimSpace(s)
 }
