@@ -50,8 +50,9 @@ func New(ts oauth2.TokenSource, accountID string, busyShowAs []string) *Client {
 	}
 }
 
-// do sends one Graph request with the mandatory Prefer: IdType="ImmutableId"
-// header (never odata.maxpagesize) and the retry policy:
+// do sends one Graph request with the mandatory Prefer: IdType="ImmutableId",
+// outlook.body-content-type="text" header (never odata.maxpagesize) and the
+// retry policy:
 //   - 429: wait Retry-After seconds, retry (max 3 retries)
 //   - 5xx: exponential backoff, retry (max 3 retries)
 //
@@ -68,7 +69,9 @@ func (c *Client) do(ctx context.Context, method, url string, body []byte) (*http
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("Prefer", `IdType="ImmutableId"`)
+		// 全 Graph リクエスト共通: ImmutableId(v1 スペック)+ body の text 化(v2 スペック 3.4)。
+		// delta 以外のエンドポイントは応答から id しか読まないため body-content-type は無害
+		req.Header.Set("Prefer", `IdType="ImmutableId", outlook.body-content-type="text"`)
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}

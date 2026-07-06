@@ -47,7 +47,7 @@ func requireCommonHeaders(t *testing.T, reqs []recordedRequest) {
 	t.Helper()
 	require.NotEmpty(t, reqs)
 	for i, rr := range reqs {
-		require.Equal(t, `IdType="ImmutableId"`, rr.Header.Get("Prefer"), "request %d", i)
+		require.Equal(t, `IdType="ImmutableId", outlook.body-content-type="text"`, rr.Header.Get("Prefer"), "request %d", i)
 		for _, v := range rr.Header.Values("Prefer") {
 			require.NotContains(t, v, "odata.maxpagesize", "request %d", i)
 		}
@@ -242,6 +242,48 @@ func TestNormalizeDeltaEventTitle(t *testing.T) {
 	got, err := normalizeDeltaEvent(de, busy)
 	require.NoError(t, err)
 	require.Equal(t, "設計レビュー", got.Title)
+}
+
+func TestNormalizeDeltaEventMeetingFields(t *testing.T) {
+	busy := map[string]bool{"busy": true}
+	base := func() deltaEvent {
+		return deltaEvent{
+			ID: "ev1", ShowAs: "busy",
+			Start: &graphTime{DateTime: "2026-07-10T01:00:00.0000000", TimeZone: "UTC"},
+			End:   &graphTime{DateTime: "2026-07-10T02:00:00.0000000", TimeZone: "UTC"},
+		}
+	}
+
+	// onlineMeeting.joinUrl が最優先(v2 スペック 3.2)
+	de := base()
+	de.OnlineMeetingURL = "https://legacy.example.com"
+	de.OnlineMeeting = &graphOnlineMeeting{JoinURL: "https://teams.microsoft.com/l/meetup-join/19%3ax"}
+	got, err := normalizeDeltaEvent(de, busy)
+	require.NoError(t, err)
+	require.Equal(t, "https://teams.microsoft.com/l/meetup-join/19%3ax", got.MeetingURL)
+
+	// joinUrl が無ければ onlineMeetingUrl
+	de = base()
+	de.OnlineMeetingURL = "https://legacy.example.com"
+	got, err = normalizeDeltaEvent(de, busy)
+	require.NoError(t, err)
+	require.Equal(t, "https://legacy.example.com", got.MeetingURL)
+
+	// どちらも無ければ location/body の正規表現フォールバック
+	de = base()
+	de.Location = &graphLocation{DisplayName: "https://work-a.zoom.us/j/86032012178"}
+	got, err = normalizeDeltaEvent(de, busy)
+	require.NoError(t, err)
+	require.Equal(t, "https://work-a.zoom.us/j/86032012178", got.MeetingURL)
+
+	// body(Prefer で text 化済み)と webLink の素通し
+	de = base()
+	de.Body = &graphBody{ContentType: "text", Content: "アジェンダ\n1. 進捗"}
+	de.WebLink = "https://outlook.live.com/calendar/item/xyz"
+	got, err = normalizeDeltaEvent(de, busy)
+	require.NoError(t, err)
+	require.Equal(t, "アジェンダ\n1. 進捗", got.Description)
+	require.Equal(t, "https://outlook.live.com/calendar/item/xyz", got.HTMLLink)
 }
 
 func TestChangesCursorInvalid(t *testing.T) {
