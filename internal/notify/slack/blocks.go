@@ -29,9 +29,13 @@ type buttonElement struct {
 }
 
 // attachment は予定 1 件分の色付きラッパー(左バーの色 = 由来アカウント色。v2.1 スペック 5 章)。
+// Fallback は blocks を持たないメッセージ(リマインド)専用の通知用テキスト。
+// トップレベル text に乗せると本文としても描画され二重表示になるため、
+// attachment 側にだけ設定する(v2.1 実測。スペック 6/8 章)。
 type attachment struct {
-	Color  string  `json:"color"`
-	Blocks []block `json:"blocks"`
+	Color    string  `json:"color"`
+	Blocks   []block `json:"blocks"`
+	Fallback string  `json:"fallback,omitempty"`
 }
 
 const (

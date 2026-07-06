@@ -68,7 +68,13 @@ func (c *Client) SendDigest(ctx context.Context, day time.Time, entries []engine
 
 func (c *Client) SendReminder(ctx context.Context, e engine.DigestEntry, lead time.Duration) error {
 	blocks, attachments := reminderMessage(e, lead, c.loc(), c.colorFor)
-	return c.post(ctx, formatReminder(e, lead, c.loc()), blocks, attachments)
+	text := formatReminder(e, lead, c.loc())
+	// リマインドは blocks を持たないため、トップレベル text には乗せず
+	// attachment 側の fallback にだけ設定する(v2.1 スペック 6/8 章。二重表示防止)。
+	if len(attachments) > 0 {
+		attachments[0].Fallback = text
+	}
+	return c.post(ctx, text, blocks, attachments)
 }
 
 func (c *Client) loc() *time.Location {
@@ -175,6 +181,10 @@ func (c *Client) channelID(ctx context.Context) (string, error) {
 }
 
 // post は blocks/attachments 付きで投稿する(text は通知プレビュー・非対応面用の fallback)。
+// トップレベル text は blocks があるとき(ダイジェスト)だけペイロードに乗せる。
+// blocks の無いメッセージ(リマインド)で text を乗せると、Slack がそれを本文としても
+// 描画し attachment と二重表示になるため(v2.1 実測。スペック 6/8 章)、その場合は
+// attachment 側の fallback に頼る(呼び出し元で設定済み)。
 // unfurl_links / unfurl_media は常に false(htmlLink・本文内 URL のプレビュー展開が
 // 1 予定ごとに巨大カードとして展開される実害があるため。v2.1 スペック 5/6 章)。
 // blocks/attachments 起因のエラー(invalid_blocks / invalid_attachments)はイベントデータ
@@ -184,8 +194,13 @@ func (c *Client) post(ctx context.Context, text string, blocks []block, attachme
 	if err != nil {
 		return err
 	}
-	payload := textOnlyPayload(ch, text)
+	payload := map[string]any{
+		"channel":      ch,
+		"unfurl_links": false,
+		"unfurl_media": false,
+	}
 	if len(blocks) > 0 {
+		payload["text"] = text
 		payload["blocks"] = blocks
 	}
 	if len(attachments) > 0 {
