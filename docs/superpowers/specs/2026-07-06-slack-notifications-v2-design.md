@@ -173,9 +173,9 @@ flowchart TB
 
 ## 12. スパイク(実測で消し込む)
 
-1. Block Kit の実表示(accessory ボタン・リンク・header・URL 内 `&` の扱い)— 初回のダイジェスト/リマインドで確認
-2. `blocks` 付き `chat.postMessage` が既存トークン・スコープ(`chat:write`)のみで通ること — 初回送信で確認
-3. `invalid_blocks` の実エラー文字列(縮退トリガーの網羅確認)— 発生時に確認
-4. Google の HTML 入り description の実表示(3.4 の簡易除去の品質)— 実データで確認
+1. Block Kit の実表示(accessory ボタン・リンク・header・URL 内 `&` の扱い)— 送信成功は実測済み(下記)。**視覚表示(ボタン・リンクの見え方)はユーザーの目視確認で消し込む**
+2. ~~`blocks` 付き `chat.postMessage` が既存トークン・スコープ(`chat:write`)のみで通ること~~ → **実測済み(2026-07-06 14:19)**: 実予定ありの当日ダイジェストを blocks 付きで送信し、エラー・縮退ログなしで投稿成功
+3. `invalid_blocks` の実エラー文字列(縮退トリガーの網羅確認)— 発生時に確認(初回実測では未発生)
+4. Google の HTML 入り description の実表示(3.4 の簡易除去の品質)— リマインドの実データで確認
 
 **実測済み(2026-07-06、本設計の前提)**: Graph calendarView delta は既定でフルリソースを返す / `Prefer: outlook.body-content-type="text"` が delta に効く(text で返る)/ Zoom URL は conferenceData(video entryPoint)と location・description 手貼りの両方に実在 / Google 全予定に htmlLink が付く。
