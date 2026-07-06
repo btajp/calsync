@@ -48,7 +48,11 @@ type SlackConfig struct {
 type Account struct {
 	ID, Provider, Email string   // Provider は "google" | "microsoft"
 	Calendars           []string // 既定 ["primary"]。microsoft は ["primary"] 以外エラー(v1制約)
-	BlockerCalendar     string   // 既定 "primary"
+	// DigestCalendars: ダイジェストのライブ取得にだけ参加するカレンダー ID。
+	// 監視対象(Calendars)には含まれないため、tick の同期・カーソル・events キャッシュ・
+	// 日次リコンサイル・ブロッカー配布の対象に構造的にならない。google のみ許容(v1制約)。
+	DigestCalendars []string
+	BlockerCalendar string // 既定 "primary"
 	// ShowOriginInDescription: true のとき、このアカウントのカレンダーに作成される
 	// ブロッカーの説明欄に元アカウントの ID(YAML の id。メールアドレスは含めない)を
 	// 記載する。既定 false(完全匿名)。トグル変更は次回リコンサイルで既存分にも遡及する。
@@ -98,6 +102,7 @@ type rawAccount struct {
 	Provider                string   `yaml:"provider"`
 	Email                   string   `yaml:"email"`
 	Calendars               []string `yaml:"calendars"`
+	DigestCalendars         []string `yaml:"digest_calendars"`
 	BlockerCalendar         string   `yaml:"blocker_calendar"`
 	ShowOriginInDescription bool     `yaml:"show_origin_in_description"`
 }
@@ -224,6 +229,7 @@ func Load(path string) (*Config, error) {
 			Provider:                ra.Provider,
 			Email:                   ra.Email,
 			Calendars:               ra.Calendars,
+			DigestCalendars:         ra.DigestCalendars,
 			BlockerCalendar:         ra.BlockerCalendar,
 			ShowOriginInDescription: ra.ShowOriginInDescription,
 		}
@@ -258,6 +264,31 @@ func Load(path string) (*Config, error) {
 			if a.BlockerCalendar != "primary" {
 				return nil, fmt.Errorf("config: account %q: microsoft supports only the primary calendar in v1 (got blocker_calendar %q)", a.ID, a.BlockerCalendar)
 			}
+			if len(a.DigestCalendars) > 0 {
+				// v1 の Graph 実装は /me/calendarView 固定でプライマリ以外を取得できないため、
+				// 既存の「microsoft は primary のみ」制約と同型でエラーにする(スペック 3 章)。
+				return nil, fmt.Errorf("config: account %q: microsoft supports only the primary calendar in v1 (got digest_calendars %q)", a.ID, a.DigestCalendars)
+			}
+		}
+		// digest_calendars 内の重複・空文字列、および calendars との重複を検証する
+		// (二重取得・二重表示の防止。スペック 3 章)。microsoft は上で既に弾かれているため
+		// ここに到達するのは google のみ。
+		calSet := make(map[string]bool, len(a.Calendars))
+		for _, cal := range a.Calendars {
+			calSet[cal] = true
+		}
+		seenDigest := make(map[string]bool, len(a.DigestCalendars))
+		for _, cal := range a.DigestCalendars {
+			if cal == "" {
+				return nil, fmt.Errorf("config: account %q: digest_calendars entries must not be empty", a.ID)
+			}
+			if calSet[cal] {
+				return nil, fmt.Errorf("config: account %q: digest_calendars %q duplicates calendars", a.ID, cal)
+			}
+			if seenDigest[cal] {
+				return nil, fmt.Errorf("config: account %q: duplicate digest_calendars entry %q", a.ID, cal)
+			}
+			seenDigest[cal] = true
 		}
 		cfg.Accounts = append(cfg.Accounts, a)
 	}

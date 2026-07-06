@@ -47,6 +47,7 @@ func TestLoad(t *testing.T) {
 				require.Equal(t, "user@gmail.com", c.Accounts[0].Email)
 				require.Equal(t, []string{"primary"}, c.Accounts[0].Calendars)
 				require.Equal(t, "primary", c.Accounts[0].BlockerCalendar)
+				require.Empty(t, c.Accounts[0].DigestCalendars)
 			},
 		},
 		{
@@ -189,6 +190,65 @@ accounts:
     calendars: [primary, second]
 `,
 			wantErr: "microsoft supports only the primary calendar",
+		},
+		{
+			name: "digest_calendars are accepted for google accounts",
+			yaml: `
+accounts:
+  - id: personal
+    provider: google
+    email: user@gmail.com
+    calendars: [primary]
+    digest_calendars: [gomi@group.calendar.google.com]
+`,
+			check: func(t *testing.T, c *Config) {
+				require.Equal(t, []string{"gomi@group.calendar.google.com"}, c.Accounts[0].DigestCalendars)
+			},
+		},
+		{
+			name: "digest_calendars are rejected for microsoft accounts (v1 constraint)",
+			yaml: `
+accounts:
+  - id: work-ms
+    provider: microsoft
+    email: a@example.com
+    digest_calendars: [second]
+`,
+			wantErr: "microsoft supports only the primary calendar",
+		},
+		{
+			name: "digest_calendars duplicating calendars is rejected",
+			yaml: `
+accounts:
+  - id: personal
+    provider: google
+    email: user@gmail.com
+    calendars: [primary, team@group.calendar.google.com]
+    digest_calendars: [team@group.calendar.google.com]
+`,
+			wantErr: "duplicates calendars",
+		},
+		{
+			name: "duplicate entries within digest_calendars are rejected",
+			yaml: `
+accounts:
+  - id: personal
+    provider: google
+    email: user@gmail.com
+    digest_calendars: [gomi@x, gomi@x]
+`,
+			wantErr: "duplicate digest_calendars entry",
+		},
+		{
+			name: "empty string in digest_calendars is rejected",
+			yaml: `
+accounts:
+  - id: personal
+    provider: google
+    email: user@gmail.com
+    digest_calendars: [""]
+`,
+			wantErr: "digest_calendars entries must not be empty",
 		},
 		{
 			name: "microsoft non-primary blocker_calendar is rejected (v1 constraint)",
