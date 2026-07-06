@@ -70,7 +70,7 @@ type NormalizedEvent struct {
 
 ### 3.4 プロバイダ変更
 
-- **google**: `normalizeEvent` で `MeetingURL`(3.2 の優先順)/ `Description` / `HTMLLink`(`item.HtmlLink`)を設定。Description は `item.Description` に**簡易 HTML 除去**を適用してから格納する: (1) `<br>` `<br/>` `</p>` を改行に置換 → (2) 残りの `<…>` タグを除去 → (3) std `html.UnescapeString` で実体参照を復元。依存追加なし。除去はプロバイダ内の表示用正規化であり、同期ロジックには影響しない
+- **google**: `normalizeEvent` で `MeetingURL`(3.2 の優先順)/ `Description` / `HTMLLink`(`item.HtmlLink`)を設定。Description は `item.Description` に**簡易 HTML 除去**を適用してから格納する: (1) `<br>` `<br/>` `</p>` を改行に置換 → (2) 残りの `<…>` タグを除去 → (3) std `html.UnescapeString` で実体参照を復元 → (4) NBSP(U+00A0)を通常スペースに正規化 → (5) 前後の空白を `TrimSpace`(表示用の後始末)。依存追加なし。除去はプロバイダ内の表示用正規化であり、同期ロジックには影響しない
 - **microsoft**: `deltaEvent` に `Body{Content, ContentType}` / `Location{DisplayName}` / `OnlineMeeting{JoinURL}` / `OnlineMeetingURL` / `WebLink` を追加し、`normalizeDeltaEvent` で設定(MeetingURL は joinUrl → onlineMeetingUrl → 3.2 の正規表現の順)。**`Prefer` ヘッダーは `Client.do()` で一元設定されているため、全リクエスト共通で `IdType="ImmutableId", outlook.body-content-type="text"` に更新する**。delta 以外のエンドポイント(作成・検索・PATCH・DELETE・mailboxSettings)は応答から id しか読まないため副作用なし(コード確認済み)。テストの共通アサート `requireCommonHeaders` の期待値も新しい併記値に更新する(全リクエスト同一のため分岐は不要)
 - **fake**: 素通し(契約テストのみ追加)
 
