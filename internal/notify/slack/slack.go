@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -41,11 +42,13 @@ func New(token, channel string) *Client {
 }
 
 func (c *Client) SendDigest(ctx context.Context, day time.Time, entries []engine.DigestEntry, failedAccounts []string) error {
-	return c.post(ctx, formatDigest(day, entries, failedAccounts, c.loc()))
+	return c.post(ctx,
+		formatDigest(day, entries, failedAccounts, c.loc()),
+		digestBlocks(day, entries, failedAccounts, c.loc()))
 }
 
 func (c *Client) SendReminder(ctx context.Context, e engine.DigestEntry, lead time.Duration) error {
-	return c.post(ctx, formatReminder(e, lead, c.loc()))
+	return c.post(ctx, formatReminder(e, lead, c.loc()), reminderBlocks(e, lead, c.loc()))
 }
 
 func (c *Client) loc() *time.Location {
@@ -151,11 +154,22 @@ func (c *Client) channelID(ctx context.Context) (string, error) {
 	return ch.ID, nil
 }
 
-func (c *Client) post(ctx context.Context, text string) error {
+// post は blocks 付きで投稿する(text は通知プレビュー・非対応面用の fallback)。
+// blocks 起因のエラー(invalid_blocks 系)はイベントデータ(件名・本文)由来でありうる
+// ため、fallback text 単体で 1 回だけ縮退再送する(v2 スペック 8 章)。
+func (c *Client) post(ctx context.Context, text string, blocks []block) error {
 	ch, err := c.channelID(ctx)
 	if err != nil {
 		return err
 	}
-	_, err = c.call(ctx, "chat.postMessage", map[string]string{"channel": ch, "text": text})
+	payload := map[string]any{"channel": ch, "text": text}
+	if len(blocks) > 0 {
+		payload["blocks"] = blocks
+	}
+	_, err = c.call(ctx, "chat.postMessage", payload)
+	if err != nil && len(blocks) > 0 && strings.Contains(err.Error(), "invalid_blocks") {
+		log.Printf("slack: invalid blocks; resending as plain text: %v", err)
+		_, err = c.call(ctx, "chat.postMessage", map[string]any{"channel": ch, "text": text})
+	}
 	return err
 }

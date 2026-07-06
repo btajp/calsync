@@ -114,6 +114,70 @@ func TestPlainHTTPErrorIsNonRetryable(t *testing.T) {
 	require.True(t, errors.Is(err, notify.ErrNonRetryable))
 }
 
+// blocks がペイロードに含まれ、text は fallback として残る。
+func TestPostMessageIncludesBlocks(t *testing.T) {
+	var got struct {
+		Text   string           `json:"text"`
+		Blocks []map[string]any `json:"blocks"`
+	}
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+		w.Write([]byte(`{"ok":true}`))
+	})
+	require.NoError(t, c.SendReminder(context.Background(), sampleEntry(), 10*time.Minute))
+	require.NotEmpty(t, got.Text) // fallback(v1 テキスト)
+	require.NotEmpty(t, got.Blocks)
+	require.Equal(t, "section", got.Blocks[0]["type"])
+}
+
+// invalid_blocks のときだけ fallback text 単体で 1 回縮退再送する(v2 スペック 8 章)。
+func TestInvalidBlocksFallsBackToTextOnce(t *testing.T) {
+	var calls []map[string]any
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		calls = append(calls, body)
+		if _, hasBlocks := body["blocks"]; hasBlocks {
+			w.Write([]byte(`{"ok":false,"error":"invalid_blocks"}`))
+			return
+		}
+		w.Write([]byte(`{"ok":true}`))
+	})
+	require.NoError(t, c.SendReminder(context.Background(), sampleEntry(), time.Minute))
+	require.Len(t, calls, 2)
+	_, hasBlocks := calls[1]["blocks"]
+	require.False(t, hasBlocks) // 再送は text のみ
+}
+
+// 縮退再送も失敗したら通常分類(ここでは non-retryable)で返る。
+func TestInvalidBlocksFallbackFailurePropagates(t *testing.T) {
+	n := 0
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		n++
+		if n == 1 {
+			w.Write([]byte(`{"ok":false,"error":"invalid_blocks"}`))
+			return
+		}
+		w.Write([]byte(`{"ok":false,"error":"channel_not_found"}`))
+	})
+	err := c.SendReminder(context.Background(), sampleEntry(), time.Minute)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, notify.ErrNonRetryable))
+	require.Equal(t, 2, n) // 縮退は 1 回だけ
+}
+
+// invalid_blocks 以外のエラーでは縮退しない。
+func TestNonBlocksErrorsDoNotFallBack(t *testing.T) {
+	n := 0
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		n++
+		w.Write([]byte(`{"ok":false,"error":"invalid_auth"}`))
+	})
+	err := c.SendReminder(context.Background(), sampleEntry(), time.Minute)
+	require.Error(t, err)
+	require.Equal(t, 1, n)
+}
+
 // U… は conversations.open で DM に解決し、プロセス存続中はキャッシュする(スペック 8 章)。
 func TestDMResolutionIsCached(t *testing.T) {
 	var opens atomic.Int64
