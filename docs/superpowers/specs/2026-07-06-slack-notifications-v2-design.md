@@ -93,31 +93,31 @@ type DigestEntry struct {
 
 ## 5. Block Kit — ダイジェスト
 
+**v2.1 改訂(2026-07-06 実表示フィードバック反映)**: 予定行はトップレベル blocks の section ではなく、**予定ごとに 1 attachment(色付き左バー)**にする。色は**由来アカウントごとの固定パレット**で塗り分け、行の区切りとアカウントの識別を同時に解決する。
+
 ```mermaid
 flowchart TB
-    H["header: 7/6(月) の予定(plain_text)"] --> E1["section(予定1): *09:00–10:00* 件名リンク [acct]<br>会議URLがあれば accessory: 参加ボタン"]
-    E1 --> E2["section(予定2)…"]
-    E2 --> C["context: …他 N 件(46件超過時のみ)"]
-    C --> F["context: ⚠ acct: 取得失敗(失敗時のみ)"]
+    H["blocks: header 7/6(月) の予定(plain_text)"] --> A1["attachment(予定1・color=アカウント色):<br>section *09:00–10:00* 件名リンク [acct]<br>会議URLがあれば accessory: 参加ボタン"]
+    A1 --> A2["attachment(予定2)…最大 20 件"]
+    A2 --> C["blocks: context …他 N 件(20件超過時のみ)"]
+    C --> F["blocks: context ⚠ acct: 取得失敗(失敗時のみ)"]
 ```
 
-- ブロック構成: `header`(日付・絵文字なし。plain_text のためエスケープ不要)+ 予定ごとに 1 `section`(mrkdwn)+ 必要時の `context`
-- section の mrkdwn: `*09:00–10:00*  <htmlLink|件名> [acct-a, acct-b]`
-  - 時刻レンジは v1 の規則そのまま(終日は `*(終日)*`、当日ウィンドウ外にはみ出す側は日付付き — v1 7 章)
-  - アカウントは **AccountIDs をカンマ区切りで全併記**(v1 と同じ)
-  - 件名が空なら「(件名なし)」をリンクラベルに使う(`<url|>` の空ラベルを作らない)
-  - HTMLLink が 7 章の検証に不合格ならリンク化せず件名をプレーン表示
-- 会議 URL が 7 章の検証に合格した場合のみ、section の `accessory` に URL ボタン(`text: "参加"`(plain_text・75 字制限は定数文言なので非該当)、`url: MeetingURL`)
-- 0 件日は header + section「今日の予定はありません」
-- **ブロック上限**: Slack は 1 メッセージ 50 ブロック。予定は最大 **46 件**(header 1 + sections 46 + context 他N件 1 + context 取得失敗 1 = 49。50 ちょうどを避ける意図的な 1 ブロックの安全マージン)。超過分は context「…他 N 件」
+- **トップレベル blocks**: `header`(日付・絵文字なし。plain_text のためエスケープ不要)+ 必要時の `context`(他 N 件・取得失敗)のみ。0 件日は header + section「今日の予定はありません」
+- **予定ごとに 1 attachment**: `{color: "#hex", blocks: [section]}`。section の中身は従来どおり:
+  - mrkdwn: `*09:00–10:00*  <htmlLink|件名> [acct-a, acct-b]`(時刻レンジは v1 規則、終日は `*(終日)*`、AccountIDs カンマ全併記、件名空 → 「(件名なし)」、HTMLLink 検証不合格 → プレーン表示)
+  - 会議 URL が 7 章の検証合格なら `accessory` に「参加」ボタン
+- **色の割当**: `cfg.Accounts` の定義順で固定パレット(8 色)を巡回割当。`slack.Client` に `Accounts []string`(YAML 定義順の ID 列)を注入し、エントリの **AccountIDs[0]**(= dedupe 統合の先頭アカウント)の色を使う。未知アカウントは `#999999`。パレット: `#4285F4` `#0F9D58` `#F4B400` `#DB4437` `#7B1FA2` `#00ACC1` `#FF7043` `#5C6BC0`
+- **件数上限**: attachments は Slack の実用上限に合わせ**最大 20 件**。超過分はトップレベル context「…他 N 件」(46 件キャップは v2.1 で 20 に変更)
+- **unfurl 抑止**: `chat.postMessage` に `unfurl_links: false` / `unfurl_media: false` を必ず付ける(htmlLink・本文内 URL のプレビュー展開が 1 予定ごとに巨大カードとして展開される実害を実測で確認済み)
 - fallback `text`: v1 の `formatDigest` の出力をそのまま設定(fallback 側は v1 の 100 件キャップのままで、blocks 側と「他 N 件」の数値が食い違うことは許容する)
 
 ## 6. Block Kit — リマインド
 
-- ブロック構成:
+- **単一の attachment**(色は由来アカウント色 — 5 章と同じ割当)に以下の blocks を入れる。トップレベル blocks は使わない:
   1. `section`(mrkdwn): `⏰ *8分後* 10:00–11:00 <htmlLink|件名> [acct-id]`。「N 分後」は実残り時間の分丸め(`Round`)・**1 分未満は「まもなく」— v1 実装(`formatReminder`)と同一規則**(v1 スペックに明記漏れだった挙動の明文化であり、blocks と fallback で表示は一致する)。MeetingURL が 7 章の検証合格なら `accessory` に「参加」ボタン
   2. Description が**非空(`strings.TrimSpace` 後に長さ > 0。表示にも trim 後を使う)**なら `section`(mrkdwn): 本文全文。長さ規則は 7 章
-- fallback `text`: v1 の `formatReminder` の出力
+- fallback `text`: v1 の `formatReminder` の出力。unfurl 抑止は 5 章と同じ(本文内 URL の展開防止)
 - リマインドの発火条件・記録条件・dedupe 送信抑止・エラー分類は v1 6 章のまま変更なし(8 章の縮退を除く)
 
 ## 7. エスケープ・切り詰め・URL 検証(v1 8 章の拡張)
@@ -141,9 +141,10 @@ flowchart TB
 
 ## 8. slack パッケージの変更
 
-- 新ファイル `internal/notify/slack/blocks.go`: `digestBlocks(day, entries, failed, loc)` / `reminderBlocks(e, lead, loc)`(最小の構造体群で型付けし、`json.Marshal` でペイロード化)
-- `chat.postMessage` のペイロードを `{channel, text, blocks}` に拡張(`text` は fallback)
-- **縮退パス**: blocks 付き送信が `ok:false` かつエラー文字列が `invalid_blocks` 系(`invalid_blocks` / `invalid_blocks_format`)で失敗した場合のみ、**blocks を外し fallback text 単体で 1 回だけ再送**する。再送の結果は通常の分類(v1)に従う。それ以外のエラーは v1 どおり(縮退なし)
+- 新ファイル `internal/notify/slack/blocks.go`: `digestMessage(day, entries, failed, loc, colorFor)` / `reminderMessage(e, lead, loc, colorFor)` が (blocks, attachments) を返す(最小の構造体群で型付けし、`json.Marshal` でペイロード化。attachment は `{color string, blocks []block}`)
+- `chat.postMessage` のペイロードを `{channel, text, blocks, attachments, unfurl_links: false, unfurl_media: false}` に拡張(`text` は fallback。blocks / attachments は空なら省略)
+- `slack.Client` に `Accounts []string`(YAML 定義順)を追加し、`cmd_run` が `cfg.Accounts` の ID 列を注入。色割当ヘルパー `colorFor(accountID)` はパレット巡回+未知 `#999999`
+- **縮退パス**: 送信が `ok:false` かつエラー文字列に `invalid_blocks` または `invalid_attachments` を含む場合のみ、**blocks と attachments を外し fallback text 単体で 1 回だけ再送**する(unfurl 抑止は再送にも付ける)。再送の結果は通常の分類(v1)に従う。それ以外のエラーは v1 どおり(縮退なし)
 - `call()` / エラー分類 / DM 解決 / タイムアウトは変更なし
 
 ## 9. ドキュメント・運用
