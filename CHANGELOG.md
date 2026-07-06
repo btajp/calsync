@@ -8,6 +8,7 @@
 
 ### Added
 
+- **通知専用カレンダー(`digest_calendars`)**: ブロッカー配布せずダイジェストにだけ載せるカレンダーを指定可能に(google のみ・リマインド対象外)
 - **Slack 通知の Block Kit 化(v2)**: ダイジェストを予定ごとのブロック表示にし、件名をカレンダーの当該予定へのリンクに、Zoom / Meet / Teams の会議 URL を「参加」ボタンにした(conferenceData / onlineMeeting → location・本文の URL 検出の順で抽出)。開始前リマインドに会議参加ボタンと本文全文(プレーンテキスト化・3,000 字制限内に切り詰め)を追加。通知プレビューには従来のテキスト形式を fallback として維持し、blocks が不正な場合はテキストのみで 1 回縮退再送する
 - **Slack 通知 v2.1(実表示フィードバック反映)**: ダイジェストの予定行を予定ごとの色付き attachment(`accounts` の定義順で固定パレットを巡回割当、未知アカウントは灰色)に変更し、表示上限を 46 件から 20 件に短縮(超過は「他 N 件」)。リマインドも単一 attachment 化。`chat.postMessage` に `unfurl_links` / `unfurl_media` を常に付与し htmlLink・会議 URL のプレビュー展開を抑止。縮退再送のトリガーに `invalid_attachments` を追加
 

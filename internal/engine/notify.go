@@ -93,7 +93,13 @@ func (e *Engine) collectDigest(ctx context.Context, day time.Time) ([]DigestEntr
 			failed = append(failed, acct.ID)
 			continue
 		}
-		for _, calID := range acct.Calendars {
+		// digest_calendars は監視対象(Calendars)には含まれない通知専用カレンダー。
+		// ダイジェストのライブ取得にだけ acct.Calendars の後ろに連結して参加させる
+		// (フィルタ・dedupe・failed 集約は既存のループをそのまま流用する。スペック 2 章)。
+		digestCalIDs := make([]string, 0, len(acct.Calendars)+len(acct.DigestCalendars))
+		digestCalIDs = append(digestCalIDs, acct.Calendars...)
+		digestCalIDs = append(digestCalIDs, acct.DigestCalendars...)
+		for _, calID := range digestCalIDs {
 			if ctx.Err() != nil {
 				return entries, failed
 			}

@@ -204,6 +204,62 @@ func TestCheckRemindersCarriesDisplayFields(t *testing.T) {
 	require.Equal(t, "https://cal/x", fn.reminders[0].entry.HTMLLink)
 }
 
+// digest_calendars は監視対象(Calendars)に含まれない通知専用カレンダー。
+// ダイジェストのライブ取得には参加する(スペック 2 章)。
+func TestCollectDigestIncludesDigestCalendars(t *testing.T) {
+	e, f, _ := digestEngine(t)
+	day := time.Date(2026, 7, 5, 0, 0, 0, 0, jstLoc)
+	e.Cfg.Accounts[0].DigestCalendars = []string{"digest-cal"}
+	digestRef := model.CalendarRef{AccountID: "a", CalendarID: "digest-cal"}
+
+	f.SetFullState(refA, nil)
+	f.SetFullState(digestRef, []model.NormalizedEvent{
+		timedEvent("gomi", "gomi@x", "ゴミの日", time.Date(2026, 7, 5, 9, 0, 0, 0, jstLoc), true),
+	})
+
+	entries, failed := e.collectDigest(context.Background(), day)
+	require.Empty(t, failed)
+	var titles []string
+	for _, en := range entries {
+		titles = append(titles, en.Title)
+	}
+	require.Equal(t, []string{"ゴミの日"}, titles)
+}
+
+// 核心の回帰テスト: digest_calendars 上の busy イベントは tick を回しても
+// 監視対象にならず、どのアカウントにもブロッカーが作られない(スペック 2 章)。
+func TestTickNeverDistributesDigestCalendarEvents(t *testing.T) {
+	e, f := newTestEngine(t)
+	e.Cfg.Accounts[0].DigestCalendars = []string{"digest-cal"}
+	digestRef := model.CalendarRef{AccountID: "a", CalendarID: "digest-cal"}
+	f.SetFullState(digestRef, []model.NormalizedEvent{busyEvent("gomi")})
+	// 監視対象の primary は空にしておき、配布があるとすれば digest-cal 由来だけと
+	// わかるようにする。
+	f.SetFullState(refA, nil)
+
+	e.tick(context.Background(), map[string]bool{}, map[model.CalendarRef]int{})
+
+	require.Empty(t, f.Blockers(refA))
+	require.Empty(t, f.Blockers(calBv))
+	require.Empty(t, f.Blockers(calCv))
+}
+
+// digest_calendars の取得失敗は通常の calendars と同じくアカウント単位で
+// failed に集約される(スペック 5 章)。
+func TestCollectDigestReportsFailedDigestCalendars(t *testing.T) {
+	e, f, _ := digestEngine(t)
+	day := time.Date(2026, 7, 5, 0, 0, 0, 0, jstLoc)
+	e.Cfg.Accounts[0].DigestCalendars = []string{"digest-cal"}
+	digestRef := model.CalendarRef{AccountID: "a", CalendarID: "digest-cal"}
+
+	f.SetFullState(refA, nil)
+	f.FailNext(digestRef, errors.New("boom"))
+
+	entries, failed := e.collectDigest(context.Background(), day)
+	require.Equal(t, []string{"a"}, failed)
+	require.Empty(t, entries)
+}
+
 func TestCollectDigestReportsFailedAccounts(t *testing.T) {
 	e, f, _ := digestEngine(t)
 	day := time.Date(2026, 7, 5, 0, 0, 0, 0, jstLoc)
