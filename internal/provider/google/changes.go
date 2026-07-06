@@ -80,6 +80,9 @@ func normalizeEvent(item *calendar.Event) model.NormalizedEvent {
 	}
 	ev.ICalUID = item.ICalUID
 	ev.Title = item.Summary
+	ev.HTMLLink = item.HtmlLink
+	ev.Description = stripHTML(item.Description)
+	ev.MeetingURL = googleMeetingURL(item, ev.Description)
 	ev.IsBusy = item.Transparency != "transparent"
 	for _, a := range item.Attendees {
 		if a != nil && a.Self && a.ResponseStatus == "declined" {
@@ -108,4 +111,20 @@ func normalizeEvent(item *calendar.Event) model.NormalizedEvent {
 		}
 	}
 	return ev
+}
+
+// googleMeetingURL は会議 URL を抽出する(v2 スペック 3.2 の優先順)。
+// conferenceData の video エントリポイント → hangoutLink → location/description の正規表現。
+func googleMeetingURL(item *calendar.Event, plainDesc string) string {
+	if item.ConferenceData != nil {
+		for _, ep := range item.ConferenceData.EntryPoints {
+			if ep != nil && ep.EntryPointType == "video" && ep.Uri != "" {
+				return ep.Uri
+			}
+		}
+	}
+	if item.HangoutLink != "" {
+		return item.HangoutLink
+	}
+	return model.ExtractMeetingURL(item.Location, plainDesc)
 }
