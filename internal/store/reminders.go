@@ -11,19 +11,22 @@ import (
 // キャッシュには busy・未辞退・ウィンドウ内の実予定しか入らない契約のため、
 // 抽出側での追加フィルタは不要(スペック 6 章)。
 type UpcomingEvent struct {
-	Ref      model.CalendarRef
-	EventID  string
-	ICalUID  string
-	Title    string
-	StartUTC time.Time
-	EndUTC   time.Time
+	Ref         model.CalendarRef
+	EventID     string
+	ICalUID     string
+	Title       string
+	MeetingURL  string
+	Description string
+	HTMLLink    string
+	StartUTC    time.Time
+	EndUTC      time.Time
 }
 
 // ListUpcomingEvents は「now < start_utc <= now+lead」の時刻指定イベントを
 // start_utc 昇順で返す(スペック 6 章の抽出条件。終日は対象外)。
 func (s *Store) ListUpcomingEvents(now time.Time, lead time.Duration) ([]UpcomingEvent, error) {
 	rows, err := s.db.Query(`
-SELECT account_id, calendar_id, event_id, ical_uid, title, start_utc, end_utc
+SELECT account_id, calendar_id, event_id, ical_uid, title, meeting_url, description, html_link, start_utc, end_utc
 FROM events
 WHERE is_all_day = 0 AND start_utc > ? AND start_utc <= ?
 ORDER BY start_utc, account_id, calendar_id, event_id`,
@@ -35,14 +38,18 @@ ORDER BY start_utc, account_id, calendar_id, event_id`,
 	var out []UpcomingEvent
 	for rows.Next() {
 		var (
-			u                  UpcomingEvent
-			icalUID, title     sql.NullString
-			startUnix, endUnix sql.NullInt64
+			u                                                 UpcomingEvent
+			icalUID, title, meetingURL, description, htmlLink sql.NullString
+			startUnix, endUnix                                sql.NullInt64
 		)
-		if err := rows.Scan(&u.Ref.AccountID, &u.Ref.CalendarID, &u.EventID, &icalUID, &title, &startUnix, &endUnix); err != nil {
+		if err := rows.Scan(&u.Ref.AccountID, &u.Ref.CalendarID, &u.EventID, &icalUID, &title, &meetingURL, &description, &htmlLink, &startUnix, &endUnix); err != nil {
 			return nil, err
 		}
-		u.ICalUID, u.Title = icalUID.String, title.String
+		u.ICalUID = icalUID.String
+		u.Title = title.String
+		u.MeetingURL = meetingURL.String
+		u.Description = description.String
+		u.HTMLLink = htmlLink.String
 		if startUnix.Valid {
 			u.StartUTC = time.Unix(startUnix.Int64, 0).UTC()
 		}

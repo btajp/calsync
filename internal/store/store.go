@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS events (
   all_day_end   TEXT,
   time_hash     TEXT NOT NULL,
   title         TEXT NOT NULL DEFAULT '',
+  meeting_url   TEXT NOT NULL DEFAULT '',
+  description   TEXT NOT NULL DEFAULT '',
+  html_link     TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (account_id, calendar_id, event_id)
 );
 CREATE INDEX IF NOT EXISTS idx_events_icaluid ON events (ical_uid, start_utc);
@@ -85,9 +88,17 @@ CREATE INDEX IF NOT EXISTS idx_reminders_sent_icaluid ON reminders_sent (ical_ui
 // 新規 DB は const schema、既存 DB は Open 時の冪等 ALTER(duplicate column のみ無視)。
 // schema version 管理は導入しない。
 func migrate(db *sql.DB) error {
-	if _, err := db.Exec(`ALTER TABLE events ADD COLUMN title TEXT NOT NULL DEFAULT ''`); err != nil {
-		if !strings.Contains(err.Error(), "duplicate column name") {
-			return fmt.Errorf("add events.title: %w", err)
+	alters := []string{
+		`ALTER TABLE events ADD COLUMN title TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE events ADD COLUMN meeting_url TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE events ADD COLUMN description TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE events ADD COLUMN html_link TEXT NOT NULL DEFAULT ''`,
+	}
+	for _, q := range alters {
+		if _, err := db.Exec(q); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column name") {
+				return fmt.Errorf("events schema migration: %w", err)
+			}
 		}
 	}
 	return nil
