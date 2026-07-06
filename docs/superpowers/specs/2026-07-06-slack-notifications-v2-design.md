@@ -117,7 +117,7 @@ flowchart TB
 - **単一の attachment**(色は由来アカウント色 — 5 章と同じ割当)に以下の blocks を入れる。トップレベル blocks は使わない:
   1. `section`(mrkdwn): `⏰ *8分後* 10:00–11:00 <htmlLink|件名> [acct-id]`。「N 分後」は実残り時間の分丸め(`Round`)・**1 分未満は「まもなく」— v1 実装(`formatReminder`)と同一規則**(v1 スペックに明記漏れだった挙動の明文化であり、blocks と fallback で表示は一致する)。MeetingURL が 7 章の検証合格なら `accessory` に「参加」ボタン
   2. Description が**非空(`strings.TrimSpace` 後に長さ > 0。表示にも trim 後を使う)**なら `section`(mrkdwn): 本文全文。長さ規則は 7 章
-- fallback `text`: v1 の `formatReminder` の出力。unfurl 抑止は 5 章と同じ(本文内 URL の展開防止)
+- fallback: v1 の `formatReminder` の出力を **attachment の `fallback` フィールド**に入れ、トップレベル `text` は**送らない**(v2.1 実測: blocks を持たないメッセージではトップレベル text が本文として描画され、attachment と二重表示になる)。unfurl 抑止は 5 章と同じ(本文内 URL の展開防止)
 - リマインドの発火条件・記録条件・dedupe 送信抑止・エラー分類は v1 6 章のまま変更なし(8 章の縮退を除く)
 
 ## 7. エスケープ・切り詰め・URL 検証(v1 8 章の拡張)
@@ -142,7 +142,7 @@ flowchart TB
 ## 8. slack パッケージの変更
 
 - 新ファイル `internal/notify/slack/blocks.go`: `digestMessage(day, entries, failed, loc, colorFor)` / `reminderMessage(e, lead, loc, colorFor)` が (blocks, attachments) を返す(最小の構造体群で型付けし、`json.Marshal` でペイロード化。attachment は `{color string, blocks []block}`)
-- `chat.postMessage` のペイロードを `{channel, text, blocks, attachments, unfurl_links: false, unfurl_media: false}` に拡張(`text` は fallback。blocks / attachments は空なら省略)
+- `chat.postMessage` のペイロードを `{channel, text?, blocks, attachments, unfurl_links: false, unfurl_media: false}` に拡張(blocks / attachments は空なら省略)。**トップレベル `text` は blocks があるとき(ダイジェスト)のみ**付ける — blocks の無いメッセージでは text が本文として描画され attachment と二重表示になるため、リマインドは attachment の `fallback` フィールドに通知用テキストを入れる(attachment 型は `{color, blocks, fallback?}`)
 - `slack.Client` に `Accounts []string`(YAML 定義順)を追加し、`cmd_run` が `cfg.Accounts` の ID 列を注入。色割当ヘルパー `colorFor(accountID)` はパレット巡回+未知 `#999999`
 - **縮退パス**: 送信が `ok:false` かつエラー文字列に `invalid_blocks` または `invalid_attachments` を含む場合のみ、**blocks と attachments を外し fallback text 単体で 1 回だけ再送**する(unfurl 抑止は再送にも付ける)。再送の結果は通常の分類(v1)に従う。それ以外のエラーは v1 どおり(縮退なし)
 - `call()` / エラー分類 / DM 解決 / タイムアウトは変更なし
