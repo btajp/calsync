@@ -59,6 +59,7 @@ type NormalizedEvent struct {
      - `https://meet.google.com/…`
      - `https://teams.microsoft.com/l/meetup-join/…`
    - URL 本体は **RFC 3986 の ASCII 文字集合のみ**(許可列挙)。空白・`"` `<` `>` `|`・全角スペースや「。」「、」等の非 ASCII はすべて終端になる。**切り出し後、末尾の `)` `]` `.` `,` `;` を除去**(括弧囲い・文末句読点の巻き込み防止)
+   - **スキームなしの手貼り**(例: 場所欄の `meet.google.com/abc-defg-hij`)にも対応する(v2.1 追補): 各フィールド内で **(1) `https://` 付きを優先**して探し、無ければ **(2) スキームなしパターン**を探して `https://` を補完する。スキームなし判定は「文字列先頭、または直前が URL 断片文字(`A-Za-z0-9/.-`)以外」の境界を要求し、`http://zoom.us/…` の途中一致による https 昇格を防ぐ(`http://` は従来どおり不採用)。フィールド優先(location → description)はこの 2 パスより上位
 
 ### 3.3 events テーブルへの 3 列追加(冪等 ALTER の 2 回目)
 
