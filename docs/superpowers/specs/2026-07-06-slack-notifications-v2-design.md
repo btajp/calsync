@@ -58,7 +58,7 @@ type NormalizedEvent struct {
      - `https://zoom.us/…` および `https://<sub>.zoom.us/…` の `/j/` `/my/` パス(**サブドメイン省略可**)
      - `https://meet.google.com/…`
      - `https://teams.microsoft.com/l/meetup-join/…`
-   - URL の終端: 空白・`"` `<` `>` `|` のいずれかまで。**切り出し後、末尾の `)` `]` `.` `,` `;` を除去**(`(https://…/j/123)` や文末ピリオドの巻き込み防止)
+   - URL 本体は **RFC 3986 の ASCII 文字集合のみ**(許可列挙)。空白・`"` `<` `>` `|`・全角スペースや「。」「、」等の非 ASCII はすべて終端になる。**切り出し後、末尾の `)` `]` `.` `,` `;` を除去**(括弧囲い・文末句読点の巻き込み防止)
 
 ### 3.3 events テーブルへの 3 列追加(冪等 ALTER の 2 回目)
 

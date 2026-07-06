@@ -22,6 +22,9 @@ func TestExtractMeetingURL(t *testing.T) {
 		{"pipe terminates url", "", "https://meet.google.com/abc|x", "https://meet.google.com/abc"},
 		{"http is ignored", "", "http://zoom.us/j/123", ""},
 		{"no match", "会議室A", "資料を読んでおく", ""},
+		{"full-width space terminates url", "", "参加URL: https://meet.google.com/abc-defg-hij　会議室B", "https://meet.google.com/abc-defg-hij"},
+		{"japanese period terminates url", "", "こちら:https://zoom.us/j/123456789。よろしく", "https://zoom.us/j/123456789"},
+		{"japanese comma terminates url", "", "https://zoom.us/j/123、資料は後送", "https://zoom.us/j/123"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
