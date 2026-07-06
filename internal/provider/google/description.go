@@ -17,8 +17,9 @@ var (
 // (4) &nbsp; 由来の U+00A0 を通常の半角スペースへ寄せる (5) タグ除去で生じた
 // 先頭・末尾の空白/改行を trim する(例: 末尾の </p> が余分な改行を残すため)。
 // 表示専用の正規化であり同期ロジック(TimeHash 等)には影響しない。
+// 生 NBSP のみの本文も正規化対象。
 func stripHTML(s string) string {
-	if !strings.ContainsAny(s, "<&") {
+	if !strings.ContainsAny(s, "<& ") {
 		return s
 	}
 	s = brTagRe.ReplaceAllString(s, "\n")
