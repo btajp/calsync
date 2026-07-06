@@ -138,6 +138,19 @@ func TestTimeHashIgnoresTitle(t *testing.T) {
 	require.Equal(t, TimeHash(allday), TimeHash(alldayTitled))
 }
 
+// MeetingURL / Description / HTMLLink も表示専用であり TimeHash に影響しない(スペック 2 章)。
+func TestTimeHashIgnoresDisplayFields(t *testing.T) {
+	base := NormalizedEvent{
+		StartUTC: time.Date(2026, 7, 10, 1, 0, 0, 0, time.UTC),
+		EndUTC:   time.Date(2026, 7, 10, 2, 0, 0, 0, time.UTC),
+	}
+	full := base
+	full.MeetingURL = "https://zoom.us/j/123"
+	full.Description = "本文"
+	full.HTMLLink = "https://calendar.google.com/event?eid=x"
+	require.Equal(t, TimeHash(base), TimeHash(full))
+}
+
 func TestWindowContains(t *testing.T) {
 	w := Window{
 		Start: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),

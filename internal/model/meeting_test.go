@@ -1,0 +1,31 @@
+package model
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestExtractMeetingURL(t *testing.T) {
+	tests := []struct {
+		name, location, description, want string
+	}{
+		{"zoom with subdomain in location", "https://work-a.zoom.us/j/89335149431?pwd=abc", "", "https://work-a.zoom.us/j/89335149431?pwd=abc"},
+		{"zoom without subdomain", "", "join: https://zoom.us/j/123456789", "https://zoom.us/j/123456789"},
+		{"zoom my-path", "", "https://zoom.us/my/example", "https://zoom.us/my/example"},
+		{"meet", "", "https://meet.google.com/abc-defg-hij", "https://meet.google.com/abc-defg-hij"},
+		{"teams", "", "https://teams.microsoft.com/l/meetup-join/19%3ameeting_x", "https://teams.microsoft.com/l/meetup-join/19%3ameeting_x"},
+		{"location wins over description", "https://meet.google.com/loc-loc-loc", "https://zoom.us/j/999", "https://meet.google.com/loc-loc-loc"},
+		{"leftmost match within a field (meet before zoom)", "", "先: https://meet.google.com/aaa-bbbb-ccc 後: https://zoom.us/j/1", "https://meet.google.com/aaa-bbbb-ccc"},
+		{"parenthesized url drops trailing paren", "", "(https://meet.google.com/abc-defg-hij)", "https://meet.google.com/abc-defg-hij"},
+		{"trailing period dropped", "", "https://zoom.us/j/123456789.", "https://zoom.us/j/123456789"},
+		{"pipe terminates url", "", "https://meet.google.com/abc|x", "https://meet.google.com/abc"},
+		{"http is ignored", "", "http://zoom.us/j/123", ""},
+		{"no match", "会議室A", "資料を読んでおく", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, ExtractMeetingURL(tt.location, tt.description))
+		})
+	}
+}
