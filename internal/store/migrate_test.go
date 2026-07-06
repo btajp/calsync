@@ -69,5 +69,21 @@ VALUES ('a', 'primary', 'ev-old', 'old@example.com', 100, 200, 'h');`)
 	got2, err := st2.GetEvent(ref, "ev-new")
 	require.NoError(t, err)
 	require.Equal(t, "設計レビュー", got2.Title)
+
+	// v2: 3 列も冪等 ALTER で追加され、ラウンドトリップする(v2 スペック 3.3)
+	require.NoError(t, st2.UpsertEvent(ref, model.NormalizedEvent{
+		ID: "ev-v2", ICalUID: "v2@example.com", Title: "件名",
+		MeetingURL:  "https://zoom.us/j/123",
+		Description: "本文テキスト",
+		HTMLLink:    "https://calendar.google.com/event?eid=x",
+		StartUTC:    time.Date(2026, 7, 10, 3, 0, 0, 0, time.UTC),
+		EndUTC:      time.Date(2026, 7, 10, 4, 0, 0, 0, time.UTC),
+		IsBusy:      true,
+	}))
+	got3, err := st2.GetEvent(ref, "ev-v2")
+	require.NoError(t, err)
+	require.Equal(t, "https://zoom.us/j/123", got3.MeetingURL)
+	require.Equal(t, "本文テキスト", got3.Description)
+	require.Equal(t, "https://calendar.google.com/event?eid=x", got3.HTMLLink)
 	require.NoError(t, st2.Close())
 }

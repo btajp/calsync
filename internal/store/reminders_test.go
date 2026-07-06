@@ -22,7 +22,10 @@ var remRef = model.CalendarRef{AccountID: "a", CalendarID: "primary"}
 func remEvent(id, ical, title string, start time.Time) model.NormalizedEvent {
 	return model.NormalizedEvent{
 		ID: id, ICalUID: ical, Title: title,
-		StartUTC: start, EndUTC: start.Add(30 * time.Minute), IsBusy: true,
+		MeetingURL:  "https://zoom.us/j/" + id,
+		Description: "desc-" + id,
+		HTMLLink:    "https://cal.example.com/" + id,
+		StartUTC:    start, EndUTC: start.Add(30 * time.Minute), IsBusy: true,
 	}
 }
 
@@ -50,6 +53,9 @@ func TestListUpcomingEvents(t *testing.T) {
 	require.Equal(t, "10分以内", got[0].Title)
 	require.Equal(t, "w@x", got[0].ICalUID)
 	require.Equal(t, remRef, got[0].Ref)
+	require.Equal(t, "https://zoom.us/j/in-window", got[0].MeetingURL)
+	require.Equal(t, "desc-in-window", got[0].Description)
+	require.Equal(t, "https://cal.example.com/in-window", got[0].HTMLLink)
 }
 
 func TestReminderSentLifecycle(t *testing.T) {

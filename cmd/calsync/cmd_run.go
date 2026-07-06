@@ -30,7 +30,13 @@ var runCmd = &cobra.Command{
 			if token == "" {
 				return fmt.Errorf("notifications.slack: environment variable %s is not set (export the bot token or remove the notifications section)", sc.BotTokenEnv)
 			}
-			notifier = slack.New(token, sc.Channel)
+			sl := slack.New(token, sc.Channel)
+			ids := make([]string, len(cfg.Accounts))
+			for i, a := range cfg.Accounts {
+				ids[i] = a.ID
+			}
+			sl.Accounts = ids
+			notifier = sl
 		}
 		eng, err := buildEngine(cfg, flagData)
 		if err != nil {

@@ -143,6 +143,67 @@ func TestCollectDigestDedupesAcrossAccounts(t *testing.T) {
 	require.Equal(t, []string{"a", "b"}, entries[0].AccountIDs)
 }
 
+// dedupe 統合: Title と HTMLLink は「最初に HTMLLink が非空のアカウント」からペアで
+// 採用し、MeetingURL / Description は独立に最初の非空(v2 スペック 4 章)。
+func TestCollectDigestMergesDisplayFieldsPairwise(t *testing.T) {
+	e, f, _ := digestEngine(t)
+	day := time.Date(2026, 7, 5, 0, 0, 0, 0, jstLoc)
+	start := time.Date(2026, 7, 5, 10, 0, 0, 0, jstLoc)
+
+	// a(YAML 先頭): HTMLLink なし・件名あり・URL なし
+	evA := timedEvent("ev-a", "same@x", "a側の件名", start, true)
+	// b: HTMLLink あり・件名なし・URL あり
+	evB := timedEvent("ev-b", "same@x", "", start, true)
+	evB.HTMLLink = "https://outlook.live.com/calendar/item/b"
+	evB.MeetingURL = "https://zoom.us/j/777"
+	evB.Description = "b側の本文"
+
+	f.SetFullState(refA, []model.NormalizedEvent{evA})
+	f.SetFullState(model.CalendarRef{AccountID: "b", CalendarID: "primary"}, []model.NormalizedEvent{evB})
+	f.SetFullState(model.CalendarRef{AccountID: "c", CalendarID: "primary"}, nil)
+
+	entries, failed := e.collectDigest(context.Background(), day)
+	require.Empty(t, failed)
+	require.Len(t, entries, 1)
+	// ペア規則: HTMLLink を持つ b の (Title="", HTMLLink) が採用される(混成しない)
+	require.Equal(t, "https://outlook.live.com/calendar/item/b", entries[0].HTMLLink)
+	require.Equal(t, "", entries[0].Title)
+	// 独立規則: URL / Description は最初の非空
+	require.Equal(t, "https://zoom.us/j/777", entries[0].MeetingURL)
+	require.Equal(t, "b側の本文", entries[0].Description)
+}
+
+// 全アカウントで HTMLLink が空なら Title は v1 規則(最初の非空)のまま。
+func TestCollectDigestTitleFallbackWithoutLinks(t *testing.T) {
+	e, f, _ := digestEngine(t)
+	day := time.Date(2026, 7, 5, 0, 0, 0, 0, jstLoc)
+	start := time.Date(2026, 7, 5, 10, 0, 0, 0, jstLoc)
+	f.SetFullState(refA, []model.NormalizedEvent{timedEvent("ev-a", "same@x", "", start, true)})
+	f.SetFullState(model.CalendarRef{AccountID: "b", CalendarID: "primary"},
+		[]model.NormalizedEvent{timedEvent("ev-b", "same@x", "b側の件名", start, true)})
+	f.SetFullState(model.CalendarRef{AccountID: "c", CalendarID: "primary"}, nil)
+
+	entries, _ := e.collectDigest(context.Background(), day)
+	require.Len(t, entries, 1)
+	require.Equal(t, "b側の件名", entries[0].Title)
+}
+
+// リマインドの entry に 3 フィールドがキャッシュから伝搬する。
+func TestCheckRemindersCarriesDisplayFields(t *testing.T) {
+	e, fn, _ := reminderEngine(t)
+	start := time.Date(2026, 7, 5, 9, 55, 0, 0, time.UTC)
+	require.NoError(t, e.Store.UpsertEvent(refA, model.NormalizedEvent{
+		ID: "ev1", ICalUID: "u@x", Title: "会議",
+		MeetingURL: "https://zoom.us/j/1", Description: "本文", HTMLLink: "https://cal/x",
+		StartUTC: start, EndUTC: start.Add(time.Hour), IsBusy: true,
+	}))
+	e.checkReminders(context.Background())
+	require.Len(t, fn.reminders, 1)
+	require.Equal(t, "https://zoom.us/j/1", fn.reminders[0].entry.MeetingURL)
+	require.Equal(t, "本文", fn.reminders[0].entry.Description)
+	require.Equal(t, "https://cal/x", fn.reminders[0].entry.HTMLLink)
+}
+
 func TestCollectDigestReportsFailedAccounts(t *testing.T) {
 	e, f, _ := digestEngine(t)
 	day := time.Date(2026, 7, 5, 0, 0, 0, 0, jstLoc)

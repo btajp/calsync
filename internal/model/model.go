@@ -22,6 +22,9 @@ type NormalizedEvent struct {
 	ID          string // プロバイダのイベントID(opaque。パース禁止)
 	ICalUID     string
 	Title       string // 件名(Slack 通知の表示専用。TimeHash には含めない — スペック 4.1)
+	MeetingURL  string // 会議 URL(v2 スペック 3.2 の規則で抽出。表示時に URL 検証を通す)
+	Description string // 本文プレーンテキスト(Graph: Prefer で text 化 / Google: 簡易 HTML 除去済み)
+	HTMLLink    string // カレンダー上の当該予定への URL(Google: htmlLink / Graph: webLink)
 	StartUTC    time.Time
 	EndUTC      time.Time
 	IsAllDay    bool

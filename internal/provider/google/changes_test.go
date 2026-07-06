@@ -330,3 +330,41 @@ func TestNormalizeEventTitle(t *testing.T) {
 	require.True(t, del.Deleted)
 	require.Equal(t, "", del.Title)
 }
+
+func TestNormalizeEventMeetingFields(t *testing.T) {
+	base := func() *calendar.Event {
+		return &calendar.Event{
+			Id:    "ev1",
+			Start: &calendar.EventDateTime{DateTime: "2026-07-10T01:00:00Z"},
+			End:   &calendar.EventDateTime{DateTime: "2026-07-10T02:00:00Z"},
+		}
+	}
+
+	// conferenceData の video エントリポイントが最優先(v2 スペック 3.2)
+	ev := base()
+	ev.HangoutLink = "https://meet.google.com/fallback"
+	ev.ConferenceData = &calendar.ConferenceData{EntryPoints: []*calendar.EntryPoint{
+		{EntryPointType: "phone", Uri: "tel:+81-3-0000-0000"},
+		{EntryPointType: "video", Uri: "https://work-a.zoom.us/j/89335149431"},
+	}}
+	got := normalizeEvent(ev)
+	require.Equal(t, "https://work-a.zoom.us/j/89335149431", got.MeetingURL)
+
+	// conferenceData が無ければ hangoutLink
+	ev = base()
+	ev.HangoutLink = "https://meet.google.com/abc-defg-hij"
+	require.Equal(t, "https://meet.google.com/abc-defg-hij", normalizeEvent(ev).MeetingURL)
+
+	// どちらも無ければ location/description の正規表現フォールバック
+	ev = base()
+	ev.Location = "https://zoom.us/j/123456789"
+	require.Equal(t, "https://zoom.us/j/123456789", normalizeEvent(ev).MeetingURL)
+
+	// htmlLink と description(HTML 除去済み)
+	ev = base()
+	ev.HtmlLink = "https://www.google.com/calendar/event?eid=xyz"
+	ev.Description = "資料<br>リンク: <a href=\"https://example.com\">here</a>&amp;co"
+	got = normalizeEvent(ev)
+	require.Equal(t, "https://www.google.com/calendar/event?eid=xyz", got.HTMLLink)
+	require.Equal(t, "資料\nリンク: here&co", got.Description)
+}

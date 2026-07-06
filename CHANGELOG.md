@@ -8,6 +8,9 @@
 
 ### Added
 
+- **Slack 通知の Block Kit 化(v2)**: ダイジェストを予定ごとのブロック表示にし、件名をカレンダーの当該予定へのリンクに、Zoom / Meet / Teams の会議 URL を「参加」ボタンにした(conferenceData / onlineMeeting → location・本文の URL 検出の順で抽出)。開始前リマインドに会議参加ボタンと本文全文(プレーンテキスト化・3,000 字制限内に切り詰め)を追加。通知プレビューには従来のテキスト形式を fallback として維持し、blocks が不正な場合はテキストのみで 1 回縮退再送する
+- **Slack 通知 v2.1(実表示フィードバック反映)**: ダイジェストの予定行を予定ごとの色付き attachment(`accounts` の定義順で固定パレットを巡回割当、未知アカウントは灰色)に変更し、表示上限を 46 件から 20 件に短縮(超過は「他 N 件」)。リマインドも単一 attachment 化。`chat.postMessage` に `unfurl_links` / `unfurl_media` を常に付与し htmlLink・会議 URL のプレビュー展開を抑止。縮退再送のトリガーに `invalid_attachments` を追加
+
 - **Slack 通知(#10)**: 朝のダイジェスト(指定時刻に当日の実予定を全アカウント横断で通知。ライブ取得のため free の予定も件名付きで含む)と開始前リマインド(指定時間前に通知。イベントキャッシュ+送信記録テーブルで再起動しても二重送信しない)。`notifications.slack`(`bot_token_env` / `channel` / `morning_digest` / `remind_before`)で設定し、トークンは環境変数のみ。件名は Slack 仕様のエスケープ済み(メンションインジェクション防止)
 
 - **ブロッカーの元アカウント表示(per-account オプトイン、#7)**: `accounts[].show_origin_in_description: true` で、そのアカウントのカレンダーに作られるブロッカーの説明欄に元アカウントの ID を記載(Google: description / Microsoft: body)。既定は従来どおり完全匿名。変更検出ハッシュにポリシー成分を合成しているため、トグルの ON/OFF は次回リコンサイルで既存ブロッカーにも遡及反映される
@@ -30,6 +33,7 @@
 
 ### Fixed
 
+- **Slack リマインドの二重表示を修正**。リマインドはトップレベル blocks を持たず attachments のみで構成されるため、Slack がトップレベル `text`(fallback)を本文としても描画し attachment と重複表示していた(実 Slack で確認済み。blocks を持つダイジェストでは発生しない)。`post()` はトップレベル `text` を `blocks` があるとき(ダイジェスト)だけ送るよう変更し、リマインドの通知用テキストは `attachment.fallback` フィールドに設定するようにした
 - **DB 全損からの再構築時にループ防止が機能しない重大バグを修正**。Reconcile が mappings 再構築(タグからの復元)より先に配布を実行する順序だったため、Graph delta がタグを返せない制約下で Microsoft カレンダー上の受領ブロッカーが実予定と誤認され全カレンダーへ再ミラーされた(実障害: 複製957件)。対策として (1) フェーズ0「タグからの mappings 先行再構築」を配布より前に追加 (2) set-difference の alive 判定にもループ遮断を適用 (3) origin 消滅 active mapping の掃除フェーズを追加。修正後のリコンサイル1回で複製957件が全自動除去され、正常状態(527予定・2,635 mappings)への復元を実機確認
 - **同一カレンダーの5回連続同期失敗でカーソルを FullResync により再初期化するフォールバックを追加**。実運用で Graph が壊れた deltaLink に対し文書化された失効シグナル(410 / syncStateNotFound)ではなく持続的な 504 を返し続け、同じカーソルを無限リトライする事象が発生したため(手動復旧はコンテナ停止+cursor クリアで可能だが、以後は自動回復する)
 

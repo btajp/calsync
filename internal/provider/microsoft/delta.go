@@ -25,17 +25,35 @@ type deltaResponseStatus struct {
 	Response string `json:"response"`
 }
 
+type graphBody struct {
+	ContentType string `json:"contentType"`
+	Content     string `json:"content"`
+}
+
+type graphLocation struct {
+	DisplayName string `json:"displayName"`
+}
+
+type graphOnlineMeeting struct {
+	JoinURL string `json:"joinUrl"`
+}
+
 type deltaEvent struct {
-	ID             string               `json:"id"`
-	Removed        *deltaRemoved        `json:"@removed"`
-	ICalUID        string               `json:"iCalUId"`
-	Subject        string               `json:"subject"`
-	IsCancelled    bool                 `json:"isCancelled"`
-	IsAllDay       bool                 `json:"isAllDay"`
-	ShowAs         string               `json:"showAs"`
-	Start          *graphTime           `json:"start"`
-	End            *graphTime           `json:"end"`
-	ResponseStatus *deltaResponseStatus `json:"responseStatus"`
+	ID               string               `json:"id"`
+	Removed          *deltaRemoved        `json:"@removed"`
+	ICalUID          string               `json:"iCalUId"`
+	Subject          string               `json:"subject"`
+	IsCancelled      bool                 `json:"isCancelled"`
+	IsAllDay         bool                 `json:"isAllDay"`
+	ShowAs           string               `json:"showAs"`
+	Start            *graphTime           `json:"start"`
+	End              *graphTime           `json:"end"`
+	ResponseStatus   *deltaResponseStatus `json:"responseStatus"`
+	Body             *graphBody           `json:"body"`
+	Location         *graphLocation       `json:"location"`
+	OnlineMeeting    *graphOnlineMeeting  `json:"onlineMeeting"`
+	OnlineMeetingURL string               `json:"onlineMeetingUrl"`
+	WebLink          string               `json:"webLink"`
 }
 
 type deltaPage struct {
@@ -124,6 +142,23 @@ func normalizeDeltaEvent(de deltaEvent, busyShowAs map[string]bool) (model.Norma
 	// NOTE: delta 応答に subject が含まれることはユニット(フィクスチャ)で検証済み。
 	// 実 API の応答は初回稼働時に要実測(スペック 13 章スパイク 1)
 	ev.Title = de.Subject
+	ev.HTMLLink = de.WebLink
+	if de.Body != nil {
+		// Prefer: outlook.body-content-type="text" によりプレーンテキスト(実測 2026-07-06)
+		ev.Description = de.Body.Content
+	}
+	loc := ""
+	if de.Location != nil {
+		loc = de.Location.DisplayName
+	}
+	switch {
+	case de.OnlineMeeting != nil && de.OnlineMeeting.JoinURL != "":
+		ev.MeetingURL = de.OnlineMeeting.JoinURL
+	case de.OnlineMeetingURL != "":
+		ev.MeetingURL = de.OnlineMeetingURL
+	default:
+		ev.MeetingURL = model.ExtractMeetingURL(loc, ev.Description)
+	}
 	ev.IsBusy = busyShowAs[de.ShowAs]
 	if de.ResponseStatus != nil && de.ResponseStatus.Response == "declined" {
 		ev.IsDeclined = true

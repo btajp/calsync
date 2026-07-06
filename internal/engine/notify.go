@@ -21,6 +21,9 @@ type DigestEntry struct {
 	EndUTC      time.Time
 	IsAllDay    bool
 	AllDayStart string
+	MeetingURL  string
+	Description string // ダイジェストの blocks では使わない(リマインド用。v2 スペック 4 章)
+	HTMLLink    string
 	AccountIDs  []string // dedupe 統合後の由来アカウント(YAML の id)
 }
 
@@ -162,6 +165,9 @@ func (e *Engine) appendDigestEntry(entries *[]DigestEntry, byKey map[string]int,
 		EndUTC:      ev.EndUTC,
 		IsAllDay:    ev.IsAllDay,
 		AllDayStart: ev.AllDayStart,
+		MeetingURL:  ev.MeetingURL,
+		Description: ev.Description,
+		HTMLLink:    ev.HTMLLink,
 		AccountIDs:  []string{accountID},
 	}
 	if !e.Cfg.DedupeSameMeeting || ev.ICalUID == "" {
@@ -174,8 +180,21 @@ func (e *Engine) appendDigestEntry(entries *[]DigestEntry, byKey map[string]int,
 		if !slices.Contains(ex.AccountIDs, accountID) {
 			ex.AccountIDs = append(ex.AccountIDs, accountID)
 		}
-		if ex.Title == "" && ev.Title != "" {
-			ex.Title = ev.Title
+		// Title と HTMLLink は同一アカウントからペアで採用する(v2 スペック 4 章):
+		// 最初に HTMLLink が非空のアカウントの (Title, HTMLLink) を使う。
+		// 全アカウントで HTMLLink が空の間は Title のみ v1 規則(最初の非空)で埋める
+		if ex.HTMLLink == "" {
+			if ev.HTMLLink != "" {
+				ex.Title, ex.HTMLLink = ev.Title, ev.HTMLLink
+			} else if ex.Title == "" && ev.Title != "" {
+				ex.Title = ev.Title
+			}
+		}
+		if ex.MeetingURL == "" {
+			ex.MeetingURL = ev.MeetingURL
+		}
+		if ex.Description == "" {
+			ex.Description = ev.Description
 		}
 		return
 	}
@@ -229,10 +248,13 @@ func (e *Engine) checkReminders(ctx context.Context) {
 			}
 		}
 		entry := DigestEntry{
-			Title:      u.Title,
-			StartUTC:   u.StartUTC,
-			EndUTC:     u.EndUTC,
-			AccountIDs: []string{u.Ref.AccountID},
+			Title:       u.Title,
+			StartUTC:    u.StartUTC,
+			EndUTC:      u.EndUTC,
+			MeetingURL:  u.MeetingURL,
+			Description: u.Description,
+			HTMLLink:    u.HTMLLink,
+			AccountIDs:  []string{u.Ref.AccountID},
 		}
 		if err := e.Notifier.SendReminder(ctx, entry, u.StartUTC.Sub(now)); err != nil {
 			if errors.Is(err, notify.ErrNonRetryable) {

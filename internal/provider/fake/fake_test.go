@@ -303,6 +303,20 @@ func TestChangesPreservesTitle(t *testing.T) {
 	require.Equal(t, "設計レビュー", evs[0].Title)
 }
 
+// fake は v2 の表示フィールドも素通しする(実プロバイダと同じ契約)。
+func TestChangesPreservesDisplayFields(t *testing.T) {
+	f := fake.New()
+	cal := model.CalendarRef{AccountID: "a", CalendarID: "primary"}
+	f.SetFullState(cal, []model.NormalizedEvent{{
+		ID: "ev1", MeetingURL: "https://zoom.us/j/1", Description: "d", HTMLLink: "https://cal/x", IsBusy: true,
+	}})
+	evs, _, err := f.Changes(context.Background(), cal, "", model.Window{})
+	require.NoError(t, err)
+	require.Equal(t, "https://zoom.us/j/1", evs[0].MeetingURL)
+	require.Equal(t, "d", evs[0].Description)
+	require.Equal(t, "https://cal/x", evs[0].HTMLLink)
+}
+
 func TestFakeImplementsProvider(t *testing.T) {
 	var p provider.Provider = fake.New()
 	require.NotNil(t, p)

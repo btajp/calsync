@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -24,10 +25,11 @@ var _ engine.Notifier = (*Client)(nil)
 
 // Client は engine.Notifier の Slack 実装。
 type Client struct {
-	Token   string
-	Channel string         // C…/G…: そのまま / U…: conversations.open で DM に解決
-	BaseURL string         // テスト用。空なら https://slack.com/api
-	TZ      *time.Location // 表示 TZ。nil なら time.Local(コンテナ TZ)
+	Token    string
+	Channel  string         // C…/G…: そのまま / U…: conversations.open で DM に解決
+	BaseURL  string         // テスト用。空なら https://slack.com/api
+	TZ       *time.Location // 表示 TZ。nil なら time.Local(コンテナ TZ)
+	Accounts []string       // YAML 定義順のアカウント ID 列(色割当用。v2.1 スペック 5 章)
 
 	httpc *http.Client
 
@@ -40,12 +42,39 @@ func New(token, channel string) *Client {
 	return &Client{Token: token, Channel: channel, httpc: &http.Client{Timeout: 10 * time.Second}}
 }
 
+// colorPalette はアカウント色の固定パレット(v2.1 スペック 5 章)。
+var colorPalette = [...]string{
+	"#4285F4", "#0F9D58", "#F4B400", "#DB4437", "#7B1FA2", "#00ACC1", "#FF7043", "#5C6BC0",
+}
+
+// unknownAccountColor は Accounts に含まれないアカウント ID の既定色。
+const unknownAccountColor = "#999999"
+
+// colorFor はアカウント ID から表示色を決める。Accounts の定義順でパレットを巡回し、
+// 未知のアカウントは unknownAccountColor にする(v2.1 スペック 5 章)。
+func (c *Client) colorFor(accountID string) string {
+	for i, id := range c.Accounts {
+		if id == accountID {
+			return colorPalette[i%len(colorPalette)]
+		}
+	}
+	return unknownAccountColor
+}
+
 func (c *Client) SendDigest(ctx context.Context, day time.Time, entries []engine.DigestEntry, failedAccounts []string) error {
-	return c.post(ctx, formatDigest(day, entries, failedAccounts, c.loc()))
+	blocks, attachments := digestMessage(day, entries, failedAccounts, c.loc(), c.colorFor)
+	return c.post(ctx, formatDigest(day, entries, failedAccounts, c.loc()), blocks, attachments)
 }
 
 func (c *Client) SendReminder(ctx context.Context, e engine.DigestEntry, lead time.Duration) error {
-	return c.post(ctx, formatReminder(e, lead, c.loc()))
+	blocks, attachments := reminderMessage(e, lead, c.loc(), c.colorFor)
+	text := formatReminder(e, lead, c.loc())
+	// リマインドは blocks を持たないため、トップレベル text には乗せず
+	// attachment 側の fallback にだけ設定する(v2.1 スペック 6/8 章。二重表示防止)。
+	if len(attachments) > 0 {
+		attachments[0].Fallback = text
+	}
+	return c.post(ctx, text, blocks, attachments)
 }
 
 func (c *Client) loc() *time.Location {
@@ -151,11 +180,47 @@ func (c *Client) channelID(ctx context.Context) (string, error) {
 	return ch.ID, nil
 }
 
-func (c *Client) post(ctx context.Context, text string) error {
+// post は blocks/attachments 付きで投稿する(text は通知プレビュー・非対応面用の fallback)。
+// トップレベル text は blocks があるとき(ダイジェスト)だけペイロードに乗せる。
+// blocks の無いメッセージ(リマインド)で text を乗せると、Slack がそれを本文としても
+// 描画し attachment と二重表示になるため(v2.1 実測。スペック 6/8 章)、その場合は
+// attachment 側の fallback に頼る(呼び出し元で設定済み)。
+// unfurl_links / unfurl_media は常に false(htmlLink・本文内 URL のプレビュー展開が
+// 1 予定ごとに巨大カードとして展開される実害があるため。v2.1 スペック 5/6 章)。
+// blocks/attachments 起因のエラー(invalid_blocks / invalid_attachments)はイベントデータ
+// (件名・本文)由来でありうるため、fallback text 単体で 1 回だけ縮退再送する(v2.1 スペック 8 章)。
+func (c *Client) post(ctx context.Context, text string, blocks []block, attachments []attachment) error {
 	ch, err := c.channelID(ctx)
 	if err != nil {
 		return err
 	}
-	_, err = c.call(ctx, "chat.postMessage", map[string]string{"channel": ch, "text": text})
+	payload := map[string]any{
+		"channel":      ch,
+		"unfurl_links": false,
+		"unfurl_media": false,
+	}
+	if len(blocks) > 0 {
+		payload["text"] = text
+		payload["blocks"] = blocks
+	}
+	if len(attachments) > 0 {
+		payload["attachments"] = attachments
+	}
+	_, err = c.call(ctx, "chat.postMessage", payload)
+	if err != nil && (len(blocks) > 0 || len(attachments) > 0) &&
+		(strings.Contains(err.Error(), "invalid_blocks") || strings.Contains(err.Error(), "invalid_attachments")) {
+		log.Printf("slack: invalid blocks/attachments; resending as plain text: %v", err)
+		_, err = c.call(ctx, "chat.postMessage", textOnlyPayload(ch, text))
+	}
 	return err
+}
+
+// textOnlyPayload は unfurl 抑止込みの text 単体ペイロード(縮退再送にも使う)。
+func textOnlyPayload(channel, text string) map[string]any {
+	return map[string]any{
+		"channel":      channel,
+		"text":         text,
+		"unfurl_links": false,
+		"unfurl_media": false,
+	}
 }
