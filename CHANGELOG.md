@@ -8,6 +8,8 @@
 
 ### Added
 
+- **Slack 通知の Block Kit 化(v2)**: ダイジェストを予定ごとのブロック表示にし、件名をカレンダーの当該予定へのリンクに、Zoom / Meet / Teams の会議 URL を「参加」ボタンにした(conferenceData / onlineMeeting → location・本文の URL 検出の順で抽出)。開始前リマインドに会議参加ボタンと本文全文(プレーンテキスト化・3,000 字制限内に切り詰め)を追加。通知プレビューには従来のテキスト形式を fallback として維持し、blocks が不正な場合はテキストのみで 1 回縮退再送する
+
 - **Slack 通知(#10)**: 朝のダイジェスト(指定時刻に当日の実予定を全アカウント横断で通知。ライブ取得のため free の予定も件名付きで含む)と開始前リマインド(指定時間前に通知。イベントキャッシュ+送信記録テーブルで再起動しても二重送信しない)。`notifications.slack`(`bot_token_env` / `channel` / `morning_digest` / `remind_before`)で設定し、トークンは環境変数のみ。件名は Slack 仕様のエスケープ済み(メンションインジェクション防止)
 
 - **ブロッカーの元アカウント表示(per-account オプトイン、#7)**: `accounts[].show_origin_in_description: true` で、そのアカウントのカレンダーに作られるブロッカーの説明欄に元アカウントの ID を記載(Google: description / Microsoft: body)。既定は従来どおり完全匿名。変更検出ハッシュにポリシー成分を合成しているため、トグルの ON/OFF は次回リコンサイルで既存ブロッカーにも遡及反映される
