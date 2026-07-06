@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -114,11 +115,13 @@ func TestPlainHTTPErrorIsNonRetryable(t *testing.T) {
 	require.True(t, errors.Is(err, notify.ErrNonRetryable))
 }
 
-// blocks がペイロードに含まれ、text は fallback として残る。
-func TestPostMessageIncludesBlocks(t *testing.T) {
+// attachments がペイロードに含まれ、text は fallback として残る
+// (リマインドは単一 attachment・トップレベル blocks は使わない。v2.1 スペック 6 章)。
+func TestPostMessageIncludesAttachments(t *testing.T) {
 	var got struct {
-		Text   string           `json:"text"`
-		Blocks []map[string]any `json:"blocks"`
+		Text        string           `json:"text"`
+		Blocks      []map[string]any `json:"blocks"`
+		Attachments []map[string]any `json:"attachments"`
 	}
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
@@ -126,30 +129,71 @@ func TestPostMessageIncludesBlocks(t *testing.T) {
 	})
 	require.NoError(t, c.SendReminder(context.Background(), sampleEntry(), 10*time.Minute))
 	require.NotEmpty(t, got.Text) // fallback(v1 テキスト)
-	require.NotEmpty(t, got.Blocks)
-	require.Equal(t, "section", got.Blocks[0]["type"])
+	require.Empty(t, got.Blocks)
+	require.Len(t, got.Attachments, 1)
+	require.NotEmpty(t, got.Attachments[0]["color"])
+	blocks, _ := got.Attachments[0]["blocks"].([]any)
+	require.NotEmpty(t, blocks)
 }
 
-// invalid_blocks のときだけ fallback text 単体で 1 回縮退再送する(v2 スペック 8 章)。
-func TestInvalidBlocksFallsBackToTextOnce(t *testing.T) {
-	var calls []map[string]any
+// ダイジェストはトップレベル blocks(header)+ 予定ごとの attachments を両方使う(v2.1 スペック 5 章)。
+func TestSendDigestIncludesHeaderAndAttachments(t *testing.T) {
+	var got struct {
+		Blocks      []map[string]any `json:"blocks"`
+		Attachments []map[string]any `json:"attachments"`
+	}
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-		calls = append(calls, body)
-		if _, hasBlocks := body["blocks"]; hasBlocks {
-			w.Write([]byte(`{"ok":false,"error":"invalid_blocks"}`))
-			return
-		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
 		w.Write([]byte(`{"ok":true}`))
 	})
-	require.NoError(t, c.SendReminder(context.Background(), sampleEntry(), time.Minute))
-	require.Len(t, calls, 2)
-	_, hasBlocks := calls[1]["blocks"]
-	require.False(t, hasBlocks) // 再送は text のみ
+	entries := []engine.DigestEntry{sampleEntry()}
+	require.NoError(t, c.SendDigest(context.Background(), time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC), entries, nil))
+	require.Equal(t, "header", got.Blocks[0]["type"])
+	require.Len(t, got.Attachments, 1)
 }
 
-// 縮退再送も失敗したら通常分類(ここでは non-retryable)で返る。
+// unfurl 抑止(v2.1 スペック 5/6 章): htmlLink・本文内 URL のプレビュー展開を防ぐため
+// chat.postMessage には常に unfurl_links / unfurl_media を false で付ける。
+func TestPostMessageSuppressesUnfurl(t *testing.T) {
+	var got map[string]any
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+		w.Write([]byte(`{"ok":true}`))
+	})
+	require.NoError(t, c.SendReminder(context.Background(), sampleEntry(), 10*time.Minute))
+	require.Equal(t, false, got["unfurl_links"])
+	require.Equal(t, false, got["unfurl_media"])
+}
+
+// invalid_blocks / invalid_attachments のときだけ fallback text 単体で 1 回縮退再送する
+// (v2.1 スペック 8 章)。再送にも unfurl 抑止を付ける。
+func TestInvalidBlocksOrAttachmentsFallsBackToTextOnce(t *testing.T) {
+	for _, apiErr := range []string{"invalid_blocks", "invalid_attachments"} {
+		t.Run(apiErr, func(t *testing.T) {
+			var calls []map[string]any
+			c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				calls = append(calls, body)
+				if len(calls) == 1 {
+					w.Write([]byte(`{"ok":false,"error":"` + apiErr + `"}`))
+					return
+				}
+				w.Write([]byte(`{"ok":true}`))
+			})
+			require.NoError(t, c.SendReminder(context.Background(), sampleEntry(), time.Minute))
+			require.Len(t, calls, 2)
+			_, hasBlocks := calls[1]["blocks"]
+			_, hasAttachments := calls[1]["attachments"]
+			require.False(t, hasBlocks)      // 再送は text のみ
+			require.False(t, hasAttachments) // 再送は text のみ
+			require.Equal(t, false, calls[1]["unfurl_links"])
+			require.Equal(t, false, calls[1]["unfurl_media"])
+		})
+	}
+}
+
+// 縮退再送も失敗したら通常分類(ここでは non-retryable)で返る(invalid_blocks/invalid_attachments 共通経路)。
 func TestInvalidBlocksFallbackFailurePropagates(t *testing.T) {
 	n := 0
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -176,6 +220,18 @@ func TestNonBlocksErrorsDoNotFallBack(t *testing.T) {
 	err := c.SendReminder(context.Background(), sampleEntry(), time.Minute)
 	require.Error(t, err)
 	require.Equal(t, 1, n)
+}
+
+// colorFor は Accounts の定義順でパレット(8 色)を巡回し、未知は #999999(v2.1 スペック 5 章)。
+func TestColorForCyclesPalette(t *testing.T) {
+	accounts := make([]string, 9) // パレットは 8 色なので 9 個目で先頭にラップする
+	for i := range accounts {
+		accounts[i] = fmt.Sprintf("acct-%d", i)
+	}
+	c := &Client{Accounts: accounts}
+	require.Equal(t, c.colorFor(accounts[0]), c.colorFor(accounts[8]))
+	require.NotEqual(t, c.colorFor(accounts[0]), c.colorFor(accounts[1]))
+	require.Equal(t, "#999999", c.colorFor("nope"))
 }
 
 // U… は conversations.open で DM に解決し、プロセス存続中はキャッシュする(スペック 8 章)。
