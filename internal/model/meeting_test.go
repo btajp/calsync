@@ -25,6 +25,14 @@ func TestExtractMeetingURL(t *testing.T) {
 		{"full-width space terminates url", "", "参加URL: https://meet.google.com/abc-defg-hij　会議室B", "https://meet.google.com/abc-defg-hij"},
 		{"japanese period terminates url", "", "こちら:https://zoom.us/j/123456789。よろしく", "https://zoom.us/j/123456789"},
 		{"japanese comma terminates url", "", "https://zoom.us/j/123、資料は後送", "https://zoom.us/j/123"},
+		{"schemeless meet in location", "meet.google.com/abc-defg-hij", "", "https://meet.google.com/abc-defg-hij"},
+		{"schemeless zoom with japanese period", "", "参加: zoom.us/j/123456789。", "https://zoom.us/j/123456789"},
+		{"schemeless zoom with subdomain", "work-a.zoom.us/j/555", "", "https://work-a.zoom.us/j/555"},
+		{"schemeless teams", "", "teams.microsoft.com/l/meetup-join/19%3ax", "https://teams.microsoft.com/l/meetup-join/19%3ax"},
+		{"http is still ignored (no partial upgrade)", "", "http://zoom.us/j/123", ""},
+		{"https wins over earlier schemeless in same field", "", "zoom.us/j/1 と https://meet.google.com/abc", "https://meet.google.com/abc"},
+		{"schemeless in location wins over https in description", "meet.google.com/loc-loc-loc", "https://zoom.us/j/999", "https://meet.google.com/loc-loc-loc"},
+		{"hostname suffix is not a boundary", "", "notzoom.us/j/123", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
