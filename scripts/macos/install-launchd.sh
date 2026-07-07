@@ -31,6 +31,10 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   die "このスクリプトは macOS 専用です"
 fi
 
+if ! command -v python3 >/dev/null 2>&1; then
+  die "python3 が見つかりません。Xcode Command Line Tools をインストールしてください(xcode-select --install)"
+fi
+
 if [[ ! -d "${DATA_DIR}" ]]; then
   die "データディレクトリが見つかりません: ${DATA_DIR}(CALSYNC_DATA で変更可)"
 fi
@@ -45,6 +49,9 @@ fi
 
 TOKEN_ENV_NAME=""
 TOKEN_VALUE=""
+# 注意: この正規表現はトップレベルのブロック形式キー(`notifications:` が行末で
+# 単独)のみを検知する。フロースタイル(`notifications: {...}`)やコメントアウト・
+# インデント違いなど YAML の他の書き方には対応していない。
 if grep -Eq '^[[:space:]]*notifications:[[:space:]]*$' "${CONFIG_PATH}"; then
   TOKEN_ENV_NAME="$(grep -m1 -E '^[[:space:]]*bot_token_env:' "${CONFIG_PATH}" \
     | sed -E 's/^[^:]*:[[:space:]]*"?([A-Za-z_][A-Za-z0-9_]*)"?.*/\1/')"
@@ -106,14 +113,17 @@ CALSYNC_TEMPLATE_PATH="${TEMPLATE_PATH}" \
 CALSYNC_PLIST_PATH="${PLIST_PATH}" \
 python3 - <<'PYEOF'
 import os
+from xml.sax.saxutils import escape
 
 template_path = os.environ["CALSYNC_TEMPLATE_PATH"]
 plist_path = os.environ["CALSYNC_PLIST_PATH"]
-bin_dir = os.environ["CALSYNC_BIN_DIR"]
-data_dir = os.environ["CALSYNC_DATA_DIR"]
-log_file = os.environ["CALSYNC_LOG_FILE"]
-token_env_name = os.environ.get("CALSYNC_TOKEN_ENV_NAME", "")
-token_value = os.environ.get("CALSYNC_TOKEN_VALUE", "")
+# plist は XML なので、埋め込み値に & < > が含まれると構造が壊れる。
+# xml.sax.saxutils.escape() で実体参照化してから置換する。
+bin_dir = escape(os.environ["CALSYNC_BIN_DIR"])
+data_dir = escape(os.environ["CALSYNC_DATA_DIR"])
+log_file = escape(os.environ["CALSYNC_LOG_FILE"])
+token_env_name = escape(os.environ.get("CALSYNC_TOKEN_ENV_NAME", ""))
+token_value = escape(os.environ.get("CALSYNC_TOKEN_VALUE", ""))
 
 with open(template_path, "r", encoding="utf-8") as f:
     content = f.read()
@@ -160,7 +170,9 @@ log "LaunchAgent を登録します"
 launchctl bootstrap "${DOMAIN}" "${PLIST_PATH}"
 
 log "起動します"
-launchctl kickstart "${DOMAIN}/${LABEL}"
+# -k: 既に稼働中なら kill してから再起動、未稼働なら起動する。
+# bootstrap の RunAtLoad で既に起動済みの状態でも set -e で落ちないための冪等化。
+launchctl kickstart -k "${DOMAIN}/${LABEL}"
 
 # --- 7. 起動確認 --------------------------------------------------------------
 
