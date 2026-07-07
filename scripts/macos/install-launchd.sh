@@ -43,6 +43,12 @@ if [[ ! -f "${CONFIG_PATH}" ]]; then
   die "設定ファイルが見つかりません: ${CONFIG_PATH}"
 fi
 
+# コンテナ運用からの移行時の落とし穴(実測 2026-07-07): credentials_file が
+# コンテナ内パス(/data/...)のままだとネイティブでは読めずクラッシュループする。
+if grep -qE '^[[:space:]]*credentials_file:[[:space:]]*/data/' "${CONFIG_PATH}"; then
+  die "calsync.yaml の credentials_file がコンテナ内パス(/data/...)のままです。ホストの絶対パス(例: ${DATA_DIR}/google-client.json)に変更してください"
+fi
+
 if [[ ! -f "${TEMPLATE_PATH}" ]]; then
   die "plist テンプレートが見つかりません: ${TEMPLATE_PATH}"
 fi
@@ -165,9 +171,25 @@ DOMAIN="gui/${UID_NUM}"
 
 log "既存の LaunchAgent を解除します(未登録なら何もしません)"
 launchctl bootout "${DOMAIN}/${LABEL}" >/dev/null 2>&1 || true
+# bootout は非同期に完了することがあり、直後の bootstrap が EIO(5)で失敗する
+# (実測 2026-07-07)。解除の完了(print が失敗する状態)を待ってから登録する。
+for _ in $(seq 1 20); do
+  launchctl print "${DOMAIN}/${LABEL}" >/dev/null 2>&1 || break
+  sleep 0.5
+done
 
 log "LaunchAgent を登録します"
-launchctl bootstrap "${DOMAIN}" "${PLIST_PATH}"
+bootstrap_ok=0
+for _ in $(seq 1 5); do
+  if launchctl bootstrap "${DOMAIN}" "${PLIST_PATH}" 2>/dev/null; then
+    bootstrap_ok=1
+    break
+  fi
+  sleep 1
+done
+if [[ "${bootstrap_ok}" != 1 ]]; then
+  die "launchctl bootstrap に失敗しました(数秒おいて再実行してください)"
+fi
 
 log "起動します"
 # -k: 既に稼働中なら kill してから再起動、未稼働なら起動する。
