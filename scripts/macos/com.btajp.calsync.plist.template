@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  calsync macOS LaunchAgent テンプレート
+  設計の正: docs/superpowers/specs/2026-07-07-macos-launchd-design.md (3.1節)
+  このファイルは scripts/macos/install-launchd.sh がプレースホルダを置換して使う。
+  手動で直接 launchctl bootstrap しないこと(プレースホルダのまま登録されてしまう)。
+
+  プレースホルダ:
+    __BIN__            calsync バイナリの配置ディレクトリ(絶対パス)
+    __DATA__           データディレクトリ(絶対パス。calsync.yaml もここに置く)
+    __TOKEN_ENV_NAME__ Slack Bot トークンを渡す環境変数名(notifications 未設定時は不要)
+    __TOKEN_VALUE__    上記環境変数の値(notifications 未設定時は不要)
+    __LOG__            標準出力・標準エラー出力を集約するログファイルの絶対パス
+
+  notifications 未設定の場合、install-launchd.sh は
+  ENVIRONMENT_VARIABLES_START/END のブロックごと削除してから配置する。
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.btajp.calsync</string>
+
+	<!-- 絶対パスのみ(launchd はシェル PATH を継承しない) -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>__BIN__/calsync</string>
+		<string>run</string>
+		<string>--config</string>
+		<string>__DATA__/calsync.yaml</string>
+		<string>--data</string>
+		<string>__DATA__</string>
+	</array>
+
+	<!-- ログイン時自動起動 -->
+	<key>RunAtLoad</key>
+	<true/>
+
+	<!-- クラッシュ時自動再起動(docker の restart: unless-stopped 相当) -->
+	<key>KeepAlive</key>
+	<true/>
+
+<!-- ENVIRONMENT_VARIABLES_START -->
+	<!--
+	  launchd の LaunchAgent はログインシェルのプロファイル(.zshrc 等)を読まないため、
+	  Slack Bot トークンはここに直接埋め込む。ファイルは 600 で保護すること。
+	-->
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>__TOKEN_ENV_NAME__</key>
+		<string>__TOKEN_VALUE__</string>
+	</dict>
+<!-- ENVIRONMENT_VARIABLES_END -->
+
+	<!-- TZ は意図的に指定しない。システムのタイムゾーンを継承させる
+	     (reconcile_at / morning_digest はシステム TZ で解釈される) -->
+
+	<!-- 標準出力・標準エラーを 1 ファイルに集約 -->
+	<key>StandardOutPath</key>
+	<string>__LOG__</string>
+
+	<key>StandardErrorPath</key>
+	<string>__LOG__</string>
+
+	<!-- クラッシュループ時の最短再起動間隔(秒) -->
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+</dict>
+</plist>

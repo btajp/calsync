@@ -55,5 +55,5 @@ docker compose config -q             # compose 構文チェック
 - GCP OAuth 同意画面が Testing のままだと refresh token が7日失効 → External は必ず「In production」に publish
 - Google Workspace 管理対象アカウントは未検証アプリ+機微スコープを強制ブロック(個人アカウントと違いクリックスルー不可)→ 管理コンソールの「API の制御 → アプリのアクセス制御」で client ID を「信頼できる」に登録
 - Entra アプリ登録直後は MSA(login.live.com)への伝播ラグで `invalid_request` が出ることがある → 数分待って再試行
-- **コンテナ稼働中、ホストから data/ の SQLite に一切アクセスしない(読み取りも禁止)**。WAL の共有メモリ/ロックは VirtioFS 境界を跨いで機能せず、ホスト側 sqlite3 の読み取りだけで DB が物理破損した実績がある(2026-07-04)。稼働中の状態確認は `docker compose logs` と `docker exec calsync /calsync status --config /data/calsync.yaml --data /data` を使う。flock も境界を跨いで効かないため、ホストの書き込み系コマンドはコンテナ停止中のみ
+- **(コンテナ運用時)コンテナ稼働中、ホストから data/ の SQLite に一切アクセスしない(読み取りも禁止)**。WAL の共有メモリ/ロックは VirtioFS 境界を跨いで機能せず、ホスト側 sqlite3 の読み取りだけで DB が物理破損した実績がある(2026-07-04)。稼働中の状態確認は `docker compose logs` と `docker exec calsync /calsync status --config /data/calsync.yaml --data /data` を使う。flock も境界を跨いで効かないため、ホストの書き込み系コマンドはコンテナ停止中のみ。**macOS ネイティブ運用(launchd)では VirtioFS 境界自体が存在しないため、同一ホストの `status` / `doctor`(OpenReadOnly)はデーモン稼働中でも安全**。書き込み系コマンド(`sync` / `reconcile` / `accounts remove`)はネイティブ・コンテナ問わずデーモン停止中のみ、という制約は共通
 - DB を失っても `calsync reconcile` がタグから全再構築する(フェーズ0が mappings を先行復元)。再構築系の変更をするときは「Graph delta はタグを返せない」前提を絶対に崩さないこと

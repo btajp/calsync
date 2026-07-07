@@ -74,9 +74,13 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 ## Step 6: 常駐化
 
-- 推奨(配布形態): `docker compose up -d --build`。設定は `./data/calsync.yaml`、TZ は compose の `TZ` 環境変数(reconcile_at の解釈に使われる)
-- コンテナ稼働中の状態確認は `docker compose logs` と `docker exec calsync /calsync status --config /data/calsync.yaml --data /data`。**コンテナ稼働中はホストから data/ の SQLite に一切触れない(読み取りの sqlite3 も禁止 — WAL は VM 境界を跨げず DB 破損の実績あり)。書き込み系コマンドはコンテナ停止中のみ**
-- アカウントを後から追加する場合: 認可(Step 4)はホストで行い、コンテナを再起動
+常駐方式はユーザーの OS で分岐する。**先にどちらか確認すること**。
+
+- **macOS**: `launchd` によるネイティブ常駐を推奨する(Docker Desktop の VM/自動更新起因の停止を避けられる)。`./scripts/macos/install-launchd.sh` を実行するだけ(冪等。ビルド → plist 生成 → 登録 → 起動まで自動)。トークンを変更したときも同じスクリプトを再実行する。アンインストールは `./scripts/macos/uninstall-launchd.sh`(バイナリ・data/ は残る)。詳細は README「macOS ネイティブ常駐(推奨)」節を参照
+  - この場合、同一ホストの `status` / `doctor`(OpenReadOnly)はデーモン稼働中でも安全(VirtioFS 境界が存在しないため)。書き込み系コマンド(`sync` / `reconcile` / `accounts remove`)はデーモン停止中のみ、という制約はコンテナ運用と共通
+- **Linux / その他(標準)**: `docker compose up -d --build`。設定は `./data/calsync.yaml`、TZ は compose の `TZ` 環境変数(reconcile_at の解釈に使われる)
+  - コンテナ稼働中の状態確認は `docker compose logs` と `docker exec calsync /calsync status --config /data/calsync.yaml --data /data`。**コンテナ稼働中はホストから data/ の SQLite に一切触れない(読み取りの sqlite3 も禁止 — WAL は VM 境界を跨げず DB 破損の実績あり)。書き込み系コマンドはコンテナ停止中のみ**
+- アカウントを後から追加する場合: 認可(Step 4)はホストで行い、常駐プロセス(launchd または コンテナ)を再起動
 
 ## Step 7: Slack 通知のセットアップ(オプション)
 

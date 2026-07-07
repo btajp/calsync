@@ -125,6 +125,64 @@ docker compose run --rm --entrypoint /calsync calsync \
 
 ## 起動
 
+常駐方式は OS によって使い分けます。**macOS では launchd によるネイティブ常駐が推奨**です。Linux やリモートサーバーでは従来どおり Docker を使います。
+
+### macOS ネイティブ常駐(推奨)
+
+Docker Desktop(VM + GUI アプリ + 自動更新)は不安定要素が多く、純 Go・CGO なしの単一バイナリである calsync にとってコンテナの利点はほとんどありません。macOS では `launchd` の LaunchAgent として直接常駐させます。
+
+```bash
+./scripts/macos/install-launchd.sh
+```
+
+このスクリプトは冪等です(何度実行してもビルド → plist 再生成 → 再登録 → 再起動をやり直すだけ)。内部で行うこと:
+
+1. macOS であること・データディレクトリ(既定 `./data`)・`calsync.yaml` の存在を確認
+2. `calsync.yaml` に `notifications` が設定されていれば、`bot_token_env`(既定 `SLACK_BOT_TOKEN`)の環境変数が現在のシェルに存在することを確認(なければエラーで中断)
+3. `go build` でバイナリを `~/.local/bin/calsync` に配置(`CALSYNC_BIN` で上書き可)
+4. Docker の calsync コンテナが稼働中なら中断し、`docker compose down` を案内(移行時の二重運用事故防止。docker コマンドが無い/デーモン停止中は黙ってスキップ)
+5. `scripts/macos/com.btajp.calsync.plist.template` からプレースホルダを置換して `~/Library/LaunchAgents/com.btajp.calsync.plist` を生成(`chmod 600` — トークンを含むため)
+6. `launchctl bootout` → `bootstrap` → `kickstart` で登録・起動
+7. `launchctl print` の起動状態と、ログ(`~/Library/Logs/calsync.log`)末尾を表示
+
+環境変数による上書き:
+
+| 変数 | 内容 | 既定値 |
+| --- | --- | --- |
+| `CALSYNC_BIN` | バイナリの配置ディレクトリ | `~/.local/bin` |
+| `CALSYNC_DATA` | データディレクトリ(`calsync.yaml` の場所) | `<リポジトリ>/data` |
+
+**更新フロー**: `git pull` してから `./scripts/macos/install-launchd.sh` を再実行するだけです(再ビルド・plist 再生成・再起動まで冪等にやり直します)。**トークンを変更した場合も同じスクリプトを再実行**してください(plist に転記し直されます)。
+
+**スリープ挙動**: Mac がスリープ中は同期・通知とも停止し、起床後の最初の tick で再開します。`morning_digest` の時刻にスリープしていた場合、**同日中に起床すれば遅延送信されます**(日付を跨いだ分は放棄される既存仕様どおりです)。
+
+状態確認・アンインストール:
+
+```bash
+launchctl print gui/$(id -u)/com.btajp.calsync   # 稼働状態
+tail -f ~/Library/Logs/calsync.log               # ログ
+./scripts/macos/uninstall-launchd.sh              # アンインストール(バイナリ・data/ は残る)
+```
+
+`calsync status` / `calsync doctor` はデータディレクトリの排他ロックを取得しない読み取り専用コマンドなので、ネイティブ運用では**デーモン稼働中でもホストからそのまま実行できます**(コンテナ運用時の制約とは異なります。詳細は [CLAUDE.md](CLAUDE.md) を参照):
+
+```bash
+./calsync status --data ./data
+./calsync doctor --config ./data/calsync.yaml --data ./data
+```
+
+一方 `calsync sync` / `calsync reconcile` / `calsync accounts remove` はデータディレクトリの排他ロックを取得するため、実行前にデーモンを停止してください:
+
+```bash
+launchctl bootout gui/$(id -u)/com.btajp.calsync
+./calsync reconcile --config ./data/calsync.yaml --data ./data
+./scripts/macos/install-launchd.sh   # 再起動(再ビルドと再登録も兼ねる)
+```
+
+### Linux / その他(標準)
+
+macOS 以外(および macOS 上での動作確認・検証用途)では Docker Compose で常駐します。calsync 本体への変更は一切ないため、この節の手順は従来どおりです。
+
 ```bash
 docker compose up -d --build
 docker compose logs -f calsync
