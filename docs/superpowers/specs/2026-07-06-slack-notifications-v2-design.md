@@ -94,22 +94,25 @@ type DigestEntry struct {
 
 ## 5. Block Kit — ダイジェスト
 
-**v2.1 改訂(2026-07-06 実表示フィードバック反映)**: 予定行はトップレベル blocks の section ではなく、**予定ごとに 1 attachment(色付き左バー)**にする。色は**由来アカウントごとの固定パレット**で塗り分け、行の区切りとアカウントの識別を同時に解決する。
+**v2.1 改訂(2026-07-06 実表示フィードバック反映)**: 予定行はトップレベル blocks の section ではなく、**attachment(色付き左バー)**にする。色は**由来アカウントごとの固定パレット**で塗り分け、行の区切りとアカウントの識別を同時に解決する。
+
+**v2.2 改訂(2026-07-14 実表示フィードバック反映)**: attachment は「予定ごとに 1 つ」ではなく、**時系列順で連続する同一色(= 同一先頭アカウント)の予定を 1 つの attachment に束ねる**(run-length グルーピング)。Slack クライアントは attachment が多いと「+ N more attachments」に自動で折りたたみ、これを API から無効化する手段は存在しないため、attachment 数を実用上の折りたたみ閾値以下に抑える。時系列・色分け・予定ごとの参加ボタン(section ごとの accessory)はすべて維持される。
 
 ```mermaid
 flowchart TB
-    H["blocks: header 7/6(月) の予定(plain_text)"] --> A1["attachment(予定1・color=アカウント色):<br>section *09:00–10:00* 件名リンク [acct]<br>会議URLがあれば accessory: 参加ボタン"]
-    A1 --> A2["attachment(予定2)…最大 20 件"]
+    H["blocks: header 7/7(火) の予定(plain_text)"] --> A1["attachment(personal 色):<br>section (終日) ゴミの日"]
+    A1 --> A2["attachment(work-a 色):<br>section 09:00–09:30 朝会〔参加〕<br>section 10:00–10:30 Daily〔参加〕<br>…連続する同色区間を 1 本に"]
     A2 --> C["blocks: context …他 N 件(20件超過時のみ)"]
     C --> F["blocks: context ⚠ acct: 取得失敗(失敗時のみ)"]
 ```
 
 - **トップレベル blocks**: `header`(日付・絵文字なし。plain_text のためエスケープ不要)+ 必要時の `context`(他 N 件・取得失敗)のみ。0 件日は header + section「今日の予定はありません」
-- **予定ごとに 1 attachment**: `{color: "#hex", blocks: [section]}`。section の中身は従来どおり:
+- **グルーピング(v2.2)**: ソート済みエントリ列(終日先頭 → 開始時刻順)を先頭から走査し、**色アカウント(AccountIDs[0])が同じ連続区間**を 1 つの `{color, blocks: [section...]}` に束ねる。色アカウントが変わったら新しい attachment を開始する(並べ替えはしない — 時系列を崩さない)
+- section の中身は従来どおり(予定 1 件 = section 1 個。参加ボタンは section の accessory なので**予定ごとに維持される**):
   - mrkdwn: `*09:00–10:00*  <htmlLink|件名> [acct-a, acct-b]`(時刻レンジは v1 規則、終日は `*(終日)*`、AccountIDs カンマ全併記、件名空 → 「(件名なし)」、HTMLLink 検証不合格 → プレーン表示)
   - 会議 URL が 7 章の検証合格なら `accessory` に「参加」ボタン
 - **色の割当**: `cfg.Accounts` の定義順で固定パレット(8 色)を巡回割当。`slack.Client` に `Accounts []string`(YAML 定義順の ID 列)を注入し、エントリの **AccountIDs[0]**(= dedupe 統合の先頭アカウント)の色を使う。未知アカウントは `#999999`。パレット: `#4285F4` `#0F9D58` `#F4B400` `#DB4437` `#7B1FA2` `#00ACC1` `#FF7043` `#5C6BC0`
-- **件数上限**: attachments は Slack の実用上限に合わせ**最大 20 件**。超過分はトップレベル context「…他 N 件」(46 件キャップは v2.1 で 20 に変更)
+- **件数上限**: 表示する**予定(section)は最大 20 件**(v2.1 の「attachment 20 件」と同数 — v2.2 では attachment 数はグルーピングにより予定数以下になる)。超過分はトップレベル context「…他 N 件」。20 件目がグループ途中でも件数優先で打ち切る(グループは途中で切れてよい)
 - **unfurl 抑止**: `chat.postMessage` に `unfurl_links: false` / `unfurl_media: false` を必ず付ける(htmlLink・本文内 URL のプレビュー展開が 1 予定ごとに巨大カードとして展開される実害を実測で確認済み)
 - fallback `text`: v1 の `formatDigest` の出力をそのまま設定(fallback 側は v1 の 100 件キャップのままで、blocks 側と「他 N 件」の数値が食い違うことは許容する)
 
