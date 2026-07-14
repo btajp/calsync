@@ -12,6 +12,7 @@
 - **通知専用カレンダー(`digest_calendars`)**: ブロッカー配布せずダイジェストにだけ載せるカレンダーを指定可能に(google のみ・リマインド対象外)
 - **Slack 通知の Block Kit 化(v2)**: ダイジェストを予定ごとのブロック表示にし、件名をカレンダーの当該予定へのリンクに、Zoom / Meet / Teams の会議 URL を「参加」ボタンにした(conferenceData / onlineMeeting → location・本文の URL 検出の順で抽出)。開始前リマインドに会議参加ボタンと本文全文(プレーンテキスト化・3,000 字制限内に切り詰め)を追加。通知プレビューには従来のテキスト形式を fallback として維持し、blocks が不正な場合はテキストのみで 1 回縮退再送する
 - **Slack 通知 v2.1(実表示フィードバック反映)**: ダイジェストの予定行を予定ごとの色付き attachment(`accounts` の定義順で固定パレットを巡回割当、未知アカウントは灰色)に変更し、表示上限を 46 件から 20 件に短縮(超過は「他 N 件」)。リマインドも単一 attachment 化。`chat.postMessage` に `unfurl_links` / `unfurl_media` を常に付与し htmlLink・会議 URL のプレビュー展開を抑止。縮退再送のトリガーに `invalid_attachments` を追加
+- **Slack 通知 v2.2(実表示フィードバック反映)**: ダイジェストの attachment を「予定ごとに 1 つ」から「時系列順で連続する同一色(先頭アカウント)の予定を 1 つにまとめる」run-length グルーピングに変更。Slack クライアントが attachment 数超過時に「+ N more attachments」へ自動折りたたむのを避けるための対応。表示上限は「予定(section)20 件」で変更なし(20 件目がグループ途中でも打ち切る)。section 単位の参加ボタン・色分け・時系列順は維持
 
 - **Slack 通知(#10)**: 朝のダイジェスト(指定時刻に当日の実予定を全アカウント横断で通知。ライブ取得のため free の予定も件名付きで含む)と開始前リマインド(指定時間前に通知。イベントキャッシュ+送信記録テーブルで再起動しても二重送信しない)。`notifications.slack`(`bot_token_env` / `channel` / `morning_digest` / `remind_before`)で設定し、トークンは環境変数のみ。件名は Slack 仕様のエスケープ済み(メンションインジェクション防止)
 
