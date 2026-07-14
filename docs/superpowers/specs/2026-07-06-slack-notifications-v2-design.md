@@ -183,4 +183,6 @@ flowchart TB
 3. `invalid_blocks` の実エラー文字列(縮退トリガーの網羅確認)— 発生時に確認(初回実測では未発生)
 4. Google の HTML 入り description の実表示(3.4 の簡易除去の品質)— リマインドの実データで確認
 
+**実測記録(2026-07-14)**: v2.2 グルーピングを実環境で確認 — 「+ N more attachments」の折りたたみが解消し、連続同一アカウントの予定が 1 本の色バーに複数行+予定ごとの参加ボタンで表示されること・時系列維持をユーザー目視確認。
+
 **実測済み(2026-07-06、本設計の前提)**: Graph calendarView delta は既定でフルリソースを返す / `Prefer: outlook.body-content-type="text"` が delta に効く(text で返る)/ Zoom URL は conferenceData(video entryPoint)と location・description 手貼りの両方に実在 / Google 全予定に htmlLink が付く。
