@@ -430,3 +430,43 @@ func TestGraphBlockerDescriptionSentAndCleared(t *testing.T) {
 	require.True(t, ok, "patch は body キーを常に含む(空でクリア)")
 	require.Equal(t, "", pb["content"])
 }
+
+// Blocker.Visibility → Graph sensitivity の写像: 空文字/private → private、
+// default/public → normal(Graph に「公開」の段階は無い。スペック §12.2)
+func TestBlockerSensitivityMapping(t *testing.T) {
+	cases := []struct {
+		visibility string
+		want       string
+	}{
+		{"", "private"},
+		{"private", "private"},
+		{"default", "normal"},
+		{"public", "normal"},
+	}
+	for _, tc := range cases {
+		t.Run("visibility="+tc.visibility, func(t *testing.T) {
+			var reqs []recordedRequest
+			handler := func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, `{"id":"ev-new"}`)
+			}
+			srv := httptest.NewServer(record(&reqs, handler))
+			defer srv.Close()
+
+			c := newTestClient(t, srv.URL, []string{"busy"})
+			b := model.Blocker{
+				Title:      "予定あり",
+				StartUTC:   time.Date(2026, 7, 10, 1, 0, 0, 0, time.UTC),
+				EndUTC:     time.Date(2026, 7, 10, 2, 0, 0, 0, time.UTC),
+				OriginTag:  "a:ev1",
+				Visibility: tc.visibility,
+			}
+			_, err := c.CreateBlocker(context.Background(), testCal, b, "calsync-vis1")
+			require.NoError(t, err)
+
+			require.Len(t, reqs, 1)
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(reqs[0].Body, &body))
+			require.Equal(t, tc.want, body["sensitivity"])
+		})
+	}
+}

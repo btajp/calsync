@@ -41,6 +41,19 @@ type graphItemBody struct {
 	Content     string `json:"content"`
 }
 
+// graphSensitivity は Blocker.Visibility を Graph の sensitivity へ写像する
+// (allowlist — スペック 2026-07-15 §12.2)。
+func graphSensitivity(b model.Blocker) string {
+	switch b.Visibility {
+	case "default", "public":
+		// Graph に「公開」の段階は無いため両方 normal = 普通の予定(スペック 2026-07-15 §12.2)
+		return "normal"
+	default:
+		// 空文字(ペアなし・既定)と検証外の値は private(安全側)
+		return "private"
+	}
+}
+
 // blockerBody builds the Graph event payload. Timed blockers are written in
 // UTC; all-day blockers use isAllDay=true with midnight bounds in the target
 // calendar's timezone (design doc 6.6: UTC midnight would shift the date).
@@ -51,7 +64,7 @@ func blockerBody(b model.Blocker, idemKey string) graphEventBody {
 		Subject:       b.Title,
 		ShowAs:        "busy",
 		IsReminderOn:  false,
-		Sensitivity:   "private",
+		Sensitivity:   graphSensitivity(b),
 		TransactionID: idemKey,
 		SingleValueExtendedProperties: []singleValueProp{
 			{ID: originPropertyID, Value: b.OriginTag},

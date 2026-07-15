@@ -244,8 +244,8 @@ func TestUpdateBlockerPatchesTimesAndDescription(t *testing.T) {
 	require.Equal(t, "/calendars/primary/events/ev-blk-1", reqs[0].Path)
 
 	m := decodeBody(t, reqs[0].Body)
-	require.ElementsMatch(t, []string{"start", "end", "description", "summary"}, mapKeys(m),
-		"patch は start/end/description/summary(detail_sync のタイトル追従)")
+	require.ElementsMatch(t, []string{"start", "end", "description", "summary", "visibility"}, mapKeys(m),
+		"patch は start/end/description/summary/visibility(detail_sync の追従)")
 	require.Equal(t, "経営会議", m["summary"])
 	start, ok := m["start"].(map[string]any)
 	require.True(t, ok)
@@ -434,4 +434,49 @@ func TestBlockerDescriptionSentAndCleared(t *testing.T) {
 	v, present := patched["description"]
 	require.True(t, present, "patch は description キーを常に含む(空でクリア)")
 	require.Equal(t, "", v)
+}
+
+// Blocker.Visibility の写像: 空文字/private → private、default/public はそのまま(スペック §12.2)。
+// insert と patch の両方で送られる(patch はトグルの遡及反映用)
+func TestBlockerVisibilityMapping(t *testing.T) {
+	cases := []struct {
+		visibility string
+		want       string
+	}{
+		{"", "private"},
+		{"private", "private"},
+		{"default", "default"},
+		{"public", "public"},
+	}
+	for _, tc := range cases {
+		t.Run("visibility="+tc.visibility, func(t *testing.T) {
+			var created, patched map[string]any
+			mux := http.NewServeMux()
+			mux.HandleFunc("POST /calendars/primary/events", func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&created)
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"id":"blk1","status":"confirmed"}`)
+			})
+			mux.HandleFunc("PATCH /calendars/primary/events/blk1", func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&patched)
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"id":"blk1"}`)
+			})
+			c := newTestClient(t, mux)
+
+			b := model.Blocker{
+				Title:      "予定あり",
+				StartUTC:   time.Date(2026, 7, 10, 1, 0, 0, 0, time.UTC),
+				EndUTC:     time.Date(2026, 7, 10, 2, 0, 0, 0, time.UTC),
+				OriginTag:  "a:ev1",
+				Visibility: tc.visibility,
+			}
+			_, err := c.CreateBlocker(context.Background(), testRef, b, "csidem1")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, created["visibility"], "insert ボディの visibility")
+
+			require.NoError(t, c.UpdateBlocker(context.Background(), testRef, "blk1", b))
+			require.Equal(t, tc.want, patched["visibility"], "patch ボディの visibility(遡及反映用に常時送信)")
+		})
+	}
 }
