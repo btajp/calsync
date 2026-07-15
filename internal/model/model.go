@@ -47,6 +47,7 @@ type Blocker struct {
 	TargetTimezone string // 終日ブロッカー作成用(Graph はこのTZの midnight 境界で作る)
 	OriginTag      string
 	Description    string // 空なら説明なし(既定)。ターゲット側のオプトインで origin 情報を記載(Issue #7)
+	Visibility     string // "private"(空文字も同義)| "default" | "public"。detail_sync ペアの設定からのみ非 private になる(スペック 2026-07-15 §12)
 }
 
 type BlockerRecord struct {

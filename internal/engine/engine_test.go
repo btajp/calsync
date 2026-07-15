@@ -821,3 +821,90 @@ func TestPromoteSuppressed_UsesDetailSyncContent(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "経営会議", bc.Title)
 }
+
+// enableDetailSyncVisibility は visibility 付きのペアを設定する(config の正規化済み値を模す)。
+func enableDetailSyncVisibility(e *Engine, from, to string, title, description bool, visibility string) {
+	e.Cfg.DetailSync = append(e.Cfg.DetailSync,
+		config.DetailSyncPair{From: from, To: to, Title: title, Description: description, Visibility: visibility})
+}
+
+// visibility=default のペアはブロッカーに Visibility が付き、ハッシュに +vis: 成分が入る。
+// visibility=private(未指定と同義)のペアは §3 の従来ハッシュと完全一致(無風保証 — スペック §12.3)
+func TestUpsertBlockers_DetailSyncVisibility(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	enableDetailSyncVisibility(e, "a", "c", true, false, "default")
+
+	ev := detailEvent("ev1")
+	require.NoError(t, e.processEvent(ctx, refA, ev))
+
+	// c: Visibility が Blocker に載る
+	bc, ok := f.StoredBlocker(calCv, f.Blockers(calCv)[0].EventID)
+	require.True(t, ok)
+	require.Equal(t, "default", bc.Visibility)
+
+	// b(ペアなし): Visibility は空(= private 扱い)
+	bb, ok := f.StoredBlocker(calBv, f.Blockers(calBv)[0].EventID)
+	require.True(t, ok)
+	require.Empty(t, bb.Visibility)
+
+	// ハッシュ: c は +vis:default 付き、b は素の TimeHash
+	mc, err := e.Store.GetMapping("a", "primary", "ev1", "c")
+	require.NoError(t, err)
+	require.Equal(t,
+		model.TimeHash(ev)+"+detail:"+model.DetailHash(true, false, ev.Title, ev.Description)+"+vis:default",
+		mc.TimeHash)
+	mb, err := e.Store.GetMapping("a", "primary", "ev1", "b")
+	require.NoError(t, err)
+	require.Equal(t, model.TimeHash(ev), mb.TimeHash)
+}
+
+// visibility=private のペアは vis 成分なし = visibility 導入前のハッシュと完全一致(無風保証)。
+// テストがペアを直接構築して Visibility="" になる場合も同じ扱いであること
+func TestDetailComponent_PrivateVisibilityIsNoop(t *testing.T) {
+	e, _ := newTestEngine(t)
+	ev := detailEvent("ev1")
+	want := "+detail:" + model.DetailHash(true, true, ev.Title, ev.Description)
+
+	enableDetailSyncVisibility(e, "a", "c", true, true, "private")
+	require.Equal(t, want, e.detailComponentFor("a", "c", ev), `"private" は vis 成分なし`)
+
+	e.Cfg.DetailSync = nil
+	enableDetailSync(e, "a", "c", true, true) // Visibility ゼロ値("")のペア
+	require.Equal(t, want, e.detailComponentFor("a", "c", ev), `"" も private と同義`)
+}
+
+// visibility トグルの遡及(FullResync 経由)と冪等キー・件数不変
+func TestFullResync_VisibilityToggleRetroactively(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	enableDetailSync(e, "a", "c", true, false) // visibility 未指定(= private)で作成
+
+	ev := detailEvent("ev1")
+	f.SetFullState(refA, []model.NormalizedEvent{ev})
+	require.NoError(t, e.SyncCalendar(ctx, refA))
+	blks := f.Blockers(calCv)
+	require.Len(t, blks, 1)
+	m0, err := e.Store.GetMapping("a", "primary", "ev1", "c")
+	require.NoError(t, err)
+
+	// private → public
+	e.Cfg.DetailSync[0].Visibility = "public"
+	require.NoError(t, e.FullResync(ctx, refA))
+	b1, ok := f.StoredBlocker(calCv, blks[0].EventID)
+	require.True(t, ok)
+	require.Equal(t, "public", b1.Visibility)
+
+	// public → private(既定へ復帰)
+	e.Cfg.DetailSync[0].Visibility = "private"
+	require.NoError(t, e.FullResync(ctx, refA))
+	b2, ok := f.StoredBlocker(calCv, blks[0].EventID)
+	require.True(t, ok)
+	require.Equal(t, "private", b2.Visibility, "blockerFor はペアの正規化済み値をそのまま載せる")
+
+	// 冪等キー・件数はトグル前後で不変
+	m2, err := e.Store.GetMapping("a", "primary", "ev1", "c")
+	require.NoError(t, err)
+	require.Equal(t, m0.IdempotencyKey, m2.IdempotencyKey)
+	require.Len(t, f.Blockers(calCv), 1)
+}

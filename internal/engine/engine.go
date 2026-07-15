@@ -358,7 +358,13 @@ func (e *Engine) detailComponentFor(originID, targetID string, ev model.Normaliz
 	if p == nil {
 		return ""
 	}
-	return "+detail:" + model.DetailHash(p.Title, p.Description, ev.Title, ev.Description)
+	comp := "+detail:" + model.DetailHash(p.Title, p.Description, ev.Title, ev.Description)
+	// visibility 成分は private(既定・空文字含む)のとき付けない — 既存ペアの
+	// 保存ハッシュを変えないため(スペック §12.3 の無風保証)
+	if p.Visibility != "" && p.Visibility != "private" {
+		comp += "+vis:" + p.Visibility
+	}
+	return comp
 }
 
 func (e *Engine) blockerFor(ctx context.Context, ev model.NormalizedEvent, originTag string, targetCal model.CalendarRef, p provider.Provider) (model.Blocker, error) {
@@ -372,8 +378,10 @@ func (e *Engine) blockerFor(ctx context.Context, ev model.NormalizedEvent, origi
 	}
 	title := e.Cfg.BlockerTitle
 	desc := e.descriptionFor(targetCal.AccountID, originTag)
+	visibility := "" // ペアなしは空文字 = private(プロバイダ側で写像)
 	originID, _, _ := strings.Cut(originTag, ":")
 	if pol := e.Cfg.DetailSyncFor(originID, targetCal.AccountID); pol != nil {
+		visibility = pol.Visibility
 		// detail_sync ペア(スペック 2026-07-15 §4): タイトル/説明を元イベントから転記。
 		// 空タイトルは blocker_title へフォールバック(events キャッシュの旧行が
 		// 加温前でも壊れない。ハッシュには空文字ベースの成分が入るため加温後に自己修復)
@@ -398,6 +406,7 @@ func (e *Engine) blockerFor(ctx context.Context, ev model.NormalizedEvent, origi
 		TargetTimezone: tz,
 		OriginTag:      originTag,
 		Description:    desc,
+		Visibility:     visibility,
 	}, nil
 }
 
