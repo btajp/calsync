@@ -39,14 +39,17 @@ func blockerEnd(b model.Blocker) *calendar.EventDateTime {
 	}
 }
 
-// googleVisibility は Blocker.Visibility を Google の visibility 値へ写像する。
-// 空文字(ペアなし・既定)は private = 従来の匿名ブロッカー(スペック 2026-07-15 §12.2)。
-// それ以外は config 検証済みの値(private/default/public)をそのまま使う。
+// googleVisibility は Blocker.Visibility を Google の visibility 値へ写像する
+// (allowlist — スペック 2026-07-15 §12.2)。default/public はそのまま使う。
 func googleVisibility(b model.Blocker) string {
-	if b.Visibility == "" {
+	switch b.Visibility {
+	case "default", "public":
+		return b.Visibility
+	default:
+		// 空文字(ペアなし・既定)と検証外の値は private = 従来の匿名ブロッカー
+		// (安全側。config 検証済みの値以外が来るのはプログラミングエラーのみ)
 		return "private"
 	}
-	return b.Visibility
 }
 
 // blockerEventBody はブロッカーの本体(summary / transparency / visibility /

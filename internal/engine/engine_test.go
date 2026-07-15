@@ -869,8 +869,7 @@ func TestDetailComponent_PrivateVisibilityIsNoop(t *testing.T) {
 	enableDetailSyncVisibility(e, "a", "c", true, true, "private")
 	require.Equal(t, want, e.detailComponentFor("a", "c", ev), `"private" は vis 成分なし`)
 
-	e.Cfg.DetailSync = nil
-	enableDetailSync(e, "a", "c", true, true) // Visibility ゼロ値("")のペア
+	e.Cfg.DetailSync = []config.DetailSyncPair{{From: "a", To: "c", Title: true, Description: true}} // Visibility ゼロ値("")を明示構築
 	require.Equal(t, want, e.detailComponentFor("a", "c", ev), `"" も private と同義`)
 }
 

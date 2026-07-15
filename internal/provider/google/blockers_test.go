@@ -449,7 +449,7 @@ func TestBlockerVisibilityMapping(t *testing.T) {
 		{"public", "public"},
 	}
 	for _, tc := range cases {
-		t.Run("visibility="+tc.want, func(t *testing.T) {
+		t.Run("visibility="+tc.visibility, func(t *testing.T) {
 			var created, patched map[string]any
 			mux := http.NewServeMux()
 			mux.HandleFunc("POST /calendars/primary/events", func(w http.ResponseWriter, r *http.Request) {

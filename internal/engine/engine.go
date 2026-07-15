@@ -359,9 +359,10 @@ func (e *Engine) detailComponentFor(originID, targetID string, ev model.Normaliz
 		return ""
 	}
 	comp := "+detail:" + model.DetailHash(p.Title, p.Description, ev.Title, ev.Description)
-	// visibility 成分は private(既定・空文字含む)のとき付けない — 既存ペアの
-	// 保存ハッシュを変えないため(スペック §12.3 の無風保証)
-	if p.Visibility != "" && p.Visibility != "private" {
+	// visibility 成分は default/public のときのみ付与(allowlist — スペック §12.3)。
+	// private・空文字(ゼロ値)・想定外の値は成分なし = 既存ペアの保存ハッシュを変えない
+	switch p.Visibility {
+	case "default", "public":
 		comp += "+vis:" + p.Visibility
 	}
 	return comp
