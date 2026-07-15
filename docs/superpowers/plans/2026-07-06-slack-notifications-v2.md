@@ -69,7 +69,7 @@ func TestExtractMeetingURL(t *testing.T) {
 	tests := []struct {
 		name, location, description, want string
 	}{
-		{"zoom with subdomain in location", "https://work-a.zoom.us/j/89335149431?pwd=abc", "", "https://work-a.zoom.us/j/89335149431?pwd=abc"},
+		{"zoom with subdomain in location", "https://example-corp.zoom.us/j/89335149431?pwd=abc", "", "https://example-corp.zoom.us/j/89335149431?pwd=abc"},
 		{"zoom without subdomain", "", "join: https://zoom.us/j/123456789", "https://zoom.us/j/123456789"},
 		{"zoom my-path", "", "https://zoom.us/my/example", "https://zoom.us/my/example"},
 		{"meet", "", "https://meet.google.com/abc-defg-hij", "https://meet.google.com/abc-defg-hij"},
@@ -300,10 +300,10 @@ func TestNormalizeEventMeetingFields(t *testing.T) {
 	ev.HangoutLink = "https://meet.google.com/fallback"
 	ev.ConferenceData = &calendar.ConferenceData{EntryPoints: []*calendar.EntryPoint{
 		{EntryPointType: "phone", Uri: "tel:+81-3-0000-0000"},
-		{EntryPointType: "video", Uri: "https://work-a.zoom.us/j/89335149431"},
+		{EntryPointType: "video", Uri: "https://example-corp.zoom.us/j/89335149431"},
 	}}
 	got := normalizeEvent(ev)
-	require.Equal(t, "https://work-a.zoom.us/j/89335149431", got.MeetingURL)
+	require.Equal(t, "https://example-corp.zoom.us/j/89335149431", got.MeetingURL)
 
 	// conferenceData が無ければ hangoutLink
 	ev = base()
@@ -492,10 +492,10 @@ func TestNormalizeDeltaEventMeetingFields(t *testing.T) {
 
 	// どちらも無ければ location/body の正規表現フォールバック
 	de = base()
-	de.Location = &graphLocation{DisplayName: "https://work-a.zoom.us/j/86032012178"}
+	de.Location = &graphLocation{DisplayName: "https://example-corp.zoom.us/j/86032012178"}
 	got, err = normalizeDeltaEvent(de, busy)
 	require.NoError(t, err)
-	require.Equal(t, "https://work-a.zoom.us/j/86032012178", got.MeetingURL)
+	require.Equal(t, "https://example-corp.zoom.us/j/86032012178", got.MeetingURL)
 
 	// body(Prefer で text 化済み)と webLink の素通し
 	de = base()

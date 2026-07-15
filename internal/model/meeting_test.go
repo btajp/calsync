@@ -10,7 +10,7 @@ func TestExtractMeetingURL(t *testing.T) {
 	tests := []struct {
 		name, location, description, want string
 	}{
-		{"zoom with subdomain in location", "https://work-a.zoom.us/j/89335149431?pwd=abc", "", "https://work-a.zoom.us/j/89335149431?pwd=abc"},
+		{"zoom with subdomain in location", "https://example-corp.zoom.us/j/89335149431?pwd=abc", "", "https://example-corp.zoom.us/j/89335149431?pwd=abc"},
 		{"zoom without subdomain", "", "join: https://zoom.us/j/123456789", "https://zoom.us/j/123456789"},
 		{"zoom my-path", "", "https://zoom.us/my/example", "https://zoom.us/my/example"},
 		{"meet", "", "https://meet.google.com/abc-defg-hij", "https://meet.google.com/abc-defg-hij"},
@@ -27,7 +27,7 @@ func TestExtractMeetingURL(t *testing.T) {
 		{"japanese comma terminates url", "", "https://zoom.us/j/123、資料は後送", "https://zoom.us/j/123"},
 		{"schemeless meet in location", "meet.google.com/abc-defg-hij", "", "https://meet.google.com/abc-defg-hij"},
 		{"schemeless zoom with japanese period", "", "参加: zoom.us/j/123456789。", "https://zoom.us/j/123456789"},
-		{"schemeless zoom with subdomain", "work-a.zoom.us/j/555", "", "https://work-a.zoom.us/j/555"},
+		{"schemeless zoom with subdomain", "example-corp.zoom.us/j/555", "", "https://example-corp.zoom.us/j/555"},
 		{"schemeless teams", "", "teams.microsoft.com/l/meetup-join/19%3ax", "https://teams.microsoft.com/l/meetup-join/19%3ax"},
 		{"http is still ignored (no partial upgrade)", "", "http://zoom.us/j/123", ""},
 		{"https wins over earlier schemeless in same field", "", "zoom.us/j/1 と https://meet.google.com/abc", "https://meet.google.com/abc"},

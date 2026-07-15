@@ -271,10 +271,10 @@ func TestNormalizeDeltaEventMeetingFields(t *testing.T) {
 
 	// どちらも無ければ location/body の正規表現フォールバック
 	de = base()
-	de.Location = &graphLocation{DisplayName: "https://work-a.zoom.us/j/86032012178"}
+	de.Location = &graphLocation{DisplayName: "https://example-corp.zoom.us/j/86032012178"}
 	got, err = normalizeDeltaEvent(de, busy)
 	require.NoError(t, err)
-	require.Equal(t, "https://work-a.zoom.us/j/86032012178", got.MeetingURL)
+	require.Equal(t, "https://example-corp.zoom.us/j/86032012178", got.MeetingURL)
 
 	// body(Prefer で text 化済み)と webLink の素通し
 	de = base()

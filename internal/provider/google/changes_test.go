@@ -345,10 +345,10 @@ func TestNormalizeEventMeetingFields(t *testing.T) {
 	ev.HangoutLink = "https://meet.google.com/fallback"
 	ev.ConferenceData = &calendar.ConferenceData{EntryPoints: []*calendar.EntryPoint{
 		{EntryPointType: "phone", Uri: "tel:+81-3-0000-0000"},
-		{EntryPointType: "video", Uri: "https://work-a.zoom.us/j/89335149431"},
+		{EntryPointType: "video", Uri: "https://example-corp.zoom.us/j/89335149431"},
 	}}
 	got := normalizeEvent(ev)
-	require.Equal(t, "https://work-a.zoom.us/j/89335149431", got.MeetingURL)
+	require.Equal(t, "https://example-corp.zoom.us/j/89335149431", got.MeetingURL)
 
 	// conferenceData が無ければ hangoutLink
 	ev = base()
