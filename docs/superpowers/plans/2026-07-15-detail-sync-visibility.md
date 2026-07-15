@@ -15,7 +15,7 @@
 - ビルド: `go build -o ./calsync ./cmd/calsync` / テスト: `go test ./... -race -count=1` / 静的: `go vet ./... && gofmt -l internal/ cmd/`(出力なし)/ `docker compose config -q`
 - `go mod tidy` 禁止。コミットは Conventional Commits(英語)。作業ブランチ `feat/detail-sync-visibility`
 - 冪等キー・`model.TimeHash`・`model.DetailHash` は一切変更しない
-- **無風保証**: visibility 未指定(= private)のペアは、保存ハッシュ・送信ボディとも現状と完全同一(稼働中の work-b => work-a に一斉 patch を起こさない)
+- **無風保証**: visibility 未指定(= private)のペアは、保存ハッシュ・送信ボディとも現状と完全同一(稼働中の既存 detail_sync ペアに一斉 patch を起こさない)
 - `Blocker.Visibility` の空文字は private 扱い(全プロバイダ)
 - vis 成分の合成は `detailComponentFor` 1 箇所に閉じる(合成順: `+detail:<hex>` の直後)
 

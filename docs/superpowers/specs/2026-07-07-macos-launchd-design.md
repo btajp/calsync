@@ -32,7 +32,7 @@ macOS では Docker Desktop 経由の常駐をやめ、**calsync バイナリを
 - ラベル: `com.btajp.calsync`。配置先: `~/Library/LaunchAgents/com.btajp.calsync.plist`(**chmod 600** — トークンを含むため)
 - `ProgramArguments`: `<BIN>/calsync run --config <DATA>/calsync.yaml --data <DATA>`(すべて絶対パス)
 - `RunAtLoad: true` + `KeepAlive: true` — ログイン時自動起動+クラッシュ自動再起動(`restart: unless-stopped` 相当)
-- `EnvironmentVariables`: `SLACK_TOKEN_CALSYNC`(または `bot_token_env` で指定した名前)を**plist に直接埋め込む**。launchd の LaunchAgent はシェルプロファイルを読まないため env はここで渡すしかない。ファイルは 600 で保護し、インストールスクリプトが現在のシェル環境変数から値を転記する
+- `EnvironmentVariables`: `SLACK_BOT_TOKEN`(または `bot_token_env` で指定した名前)を**plist に直接埋め込む**。launchd の LaunchAgent はシェルプロファイルを読まないため env はここで渡すしかない。ファイルは 600 で保護し、インストールスクリプトが現在のシェル環境変数から値を転記する
 - `TZ` は指定しない(システムのタイムゾーンを継承 — `reconcile_at` / `morning_digest` はシステム TZ で解釈される。compose の `TZ: Asia/Tokyo` と等価になることを README に明記)
 - ログ: `StandardOutPath` / `StandardErrorPath` → `~/Library/Logs/calsync.log`(単一ファイルに集約)
 - `ThrottleInterval: 10`(クラッシュループ時の再起動間隔)
