@@ -139,6 +139,13 @@ DB スキーマ変更なし(ハッシュは opaque な TEXT、元データは ev
 - エンジン結合(fake): ペア ON で作成されるブロッカーの内容 / origin タイトル変更 → 次 tick で patch / ペア OFF → ON・ON → OFF の遡及(FullResync 経由)/ 収容 sentinel → 自己修復 patch が 1 回だけ走る(ペアあり・**ペアなし両方**)/ ペア解除後に DB 再構築を挟んでも既定内容へ復帰する / suppressed 昇格時の内容 / 設定変更の前後で冪等キーとブロッカー件数が不変(二重作成しない — §5 の中核主張の固定)
 - ライブ検証: 実運用構成で、デーモン停止 → `detail_sync` を 1 ペア追記 → 停止中に `calsync reconcile` → デーモン起動 → 既存ブロッカーのタイトル反映を確認 → origin でタイトル変更 → 約 1 分で追従 → 同手順で設定を外し「予定あり」への復帰を確認(書き込み系コマンドはデーモン停止中のみ、の運用制約に従う)
 
+### 実測記録(2026-07-15)
+
+- 実運用構成に `work-b => work-a, fields: [title, description]` を投入(テストではなく恒久設定)。手順: デーモン停止 → 新バイナリ再ビルド → 設定追記 → 停止中 `calsync reconcile`(完走・エラーなし)→ 再起動 → 全 6 アカウント ok
+- 投入時点で work-b はウィンドウ内 busy 0 件(mappings・events とも 0 行を SQLite で確認)。その後 work-b に入った予定が work-a へ転記され、**タイトル・説明本文・origin 行(show_origin_in_description ON のため末尾併記)がすべて意図どおり表示されることをユーザーが目視確認**(ブロッカーは非公開マーク付き = visibility=private 維持も確認)
+- 「設定を外して復帰」は恒久設定のため意図的に未実施(fake の結合テスト `TestFullResync_DetailSyncTogglesRetroactively` で担保)
+- この検証から追加要件が判明: 内容を開示するペアではブロッカーの visibility 自体も設定したい(非公開マークを外したい)→ 別スペックで対応
+
 ## 11. スコープ外
 
 - origin カレンダー単位の粒度(タグ形式拡張が前提。§1 参照)
