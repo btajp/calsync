@@ -107,8 +107,17 @@ func (c *Client) CreateBlocker(ctx context.Context, cal model.CalendarRef, b mod
 		}
 		return created.ID, nil
 	case status == http.StatusConflict:
-		// transactionId の再送(クラッシュ後の再実行)。既存ブロッカーをタグで特定する。
-		return c.findBlockerByOriginTag(ctx, b.OriginTag)
+		// transactionId の再送(クラッシュ後の再実行)。既存ブロッカーをタグで特定し、
+		// 停止中に origin の内容が変わっている可能性に備えて、作成しようとしていた
+		// 内容で PATCH してから返す(スペック 2026-07-15 §5。Google の 409 収容と対称)
+		id, err := c.findBlockerByOriginTag(ctx, b.OriginTag)
+		if err != nil {
+			return "", err
+		}
+		if err := c.UpdateBlocker(ctx, cal, id, b); err != nil {
+			return "", fmt.Errorf("graph create blocker: align existing %s: %w", id, err)
+		}
+		return id, nil
 	default:
 		return "", fmt.Errorf("graph create blocker: status %d: %s", status, body)
 	}

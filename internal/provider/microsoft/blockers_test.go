@@ -117,6 +117,10 @@ func TestCreateBlockerConflictReturnsExistingID(t *testing.T) {
 		}
 		fmt.Fprint(w, `{"value":[{"id":"existing-ev-9"}]}`)
 	})
+	mux.HandleFunc("/me/events/existing-ev-9", func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPatch, r.Method)
+		fmt.Fprint(w, `{"id":"existing-ev-9"}`)
+	})
 	srv := httptest.NewServer(record(&reqs, mux.ServeHTTP))
 	defer srv.Close()
 
@@ -131,13 +135,22 @@ func TestCreateBlockerConflictReturnsExistingID(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "existing-ev-9", id)
 
-	require.Len(t, reqs, 2)
+	require.Len(t, reqs, 3)
 	require.Equal(t, http.MethodGet, reqs[1].Method)
 	u, err := url.Parse(reqs[1].URL)
 	require.NoError(t, err)
 	require.Equal(t,
 		"singleValueExtendedProperties/Any(ep: ep/id eq '"+wantOriginPropID+"' and ep/value eq 'personal:ev1')",
 		u.Query().Get("$filter"))
+	// クラッシュ再実行の収容では既存ブロッカーの内容が古い可能性があるため、
+	// 作成しようとしていた内容で PATCH してから ID を返す(スペック 2026-07-15 §5)
+	require.Equal(t, http.MethodPatch, reqs[2].Method)
+	var patched map[string]any
+	require.NoError(t, json.Unmarshal(reqs[2].Body, &patched))
+	require.Equal(t, "予定あり", patched["subject"], "PATCH ボディに転記内容(subject)が入る")
+	body, ok := patched["body"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "", body["content"], "description も揃える(この Blocker は説明なし)")
 	requireCommonHeaders(t, reqs)
 }
 
@@ -159,6 +172,9 @@ func TestFindBlockerByOriginTagEncodesSpacesAsPercent20(t *testing.T) {
 		}
 		rawQuery = r.URL.RawQuery
 		fmt.Fprint(w, `{"value":[{"id":"existing-ev-9"}]}`)
+	})
+	mux.HandleFunc("/me/events/existing-ev-9", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"id":"existing-ev-9"}`)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
