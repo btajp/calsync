@@ -60,13 +60,15 @@ type Account struct {
 	ShowOriginInDescription bool `yaml:"show_origin_in_description"`
 }
 
-// DetailSyncPair は detail_sync の 1 エントリ(スペック 2026-07-15 §2)。
+// DetailSyncPair は detail_sync の 1 エントリ(スペック 2026-07-15 §2, §12)。
 // origin(From)→ target(To)アカウントの一方通行のペアで、指定したペアに限り
 // ブロッカーのタイトル/説明を元イベントから転記する(既定は完全匿名のまま)。
 // fields は検証時に bool へ正規化する(正規順 title → description はハッシュ側で担保)。
+// Visibility は検証時に正規化済み("private" | "default" | "public"。未指定は "private")。
 type DetailSyncPair struct {
 	From, To           string
 	Title, Description bool
+	Visibility         string
 }
 
 // rawConfig は YAML の生の形。KnownFields(true) の照合対象になるため、
@@ -119,9 +121,10 @@ type rawAccount struct {
 }
 
 type rawDetailSync struct {
-	From   string   `yaml:"from"`
-	To     string   `yaml:"to"`
-	Fields []string `yaml:"fields"`
+	From       string   `yaml:"from"`
+	To         string   `yaml:"to"`
+	Fields     []string `yaml:"fields"`
+	Visibility string   `yaml:"visibility"`
 }
 
 var syncWindowRe = regexp.MustCompile(`^([0-9]+)(mo|d)$`)
@@ -347,6 +350,14 @@ func Load(path string) (*Config, error) {
 			default:
 				return nil, fmt.Errorf("config: detail_sync[%d]: invalid field %q (want title or description)", i, fld)
 			}
+		}
+		switch rd.Visibility {
+		case "":
+			p.Visibility = "private" // 未指定 = 従来どおり非公開(スペック §12.1)
+		case "private", "default", "public":
+			p.Visibility = rd.Visibility
+		default:
+			return nil, fmt.Errorf("config: detail_sync[%d]: invalid visibility %q (want private, default, or public)", i, rd.Visibility)
 		}
 		cfg.DetailSync = append(cfg.DetailSync, p)
 	}

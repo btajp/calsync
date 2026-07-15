@@ -368,8 +368,8 @@ detail_sync:
 `,
 			check: func(t *testing.T, c *Config) {
 				require.Equal(t, []DetailSyncPair{
-					{From: "a", To: "b", Title: true, Description: true},
-					{From: "b", To: "a", Title: true},
+					{From: "a", To: "b", Title: true, Description: true, Visibility: "private"},
+					{From: "b", To: "a", Title: true, Visibility: "private"},
 				}, c.DetailSync)
 			},
 		},
@@ -473,6 +473,66 @@ detail_sync:
     fields: [title]
 `,
 			wantErr: "field form not found",
+		},
+		{
+			name: "detail_sync visibility parsed and normalized",
+			yaml: `
+accounts:
+  - id: a
+    provider: google
+    email: a@gmail.com
+  - id: b
+    provider: google
+    email: b@gmail.com
+detail_sync:
+  - from: a
+    to: b
+    fields: [title]
+    visibility: default
+  - from: b
+    to: a
+    fields: [title]
+`,
+			check: func(t *testing.T, c *Config) {
+				require.Equal(t, "default", c.DetailSync[0].Visibility)
+				require.Equal(t, "private", c.DetailSync[1].Visibility, "未指定は private に正規化")
+			},
+		},
+		{
+			name: "detail_sync invalid visibility is rejected",
+			yaml: `
+accounts:
+  - id: a
+    provider: google
+    email: a@gmail.com
+  - id: b
+    provider: google
+    email: b@gmail.com
+detail_sync:
+  - from: a
+    to: b
+    fields: [title]
+    visibility: secret
+`,
+			wantErr: `invalid visibility "secret" (want private, default, or public)`,
+		},
+		{
+			name: "detail_sync unknown visibility-like key is rejected by KnownFields",
+			yaml: `
+accounts:
+  - id: a
+    provider: google
+    email: a@gmail.com
+  - id: b
+    provider: google
+    email: b@gmail.com
+detail_sync:
+  - from: a
+    to: b
+    fields: [title]
+    visibilty: default
+`,
+			wantErr: "field visibilty not found",
 		},
 	}
 	for _, tt := range tests {
