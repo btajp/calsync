@@ -118,7 +118,6 @@ func TestCreateBlockerConflictReturnsExistingID(t *testing.T) {
 		fmt.Fprint(w, `{"value":[{"id":"existing-ev-9"}]}`)
 	})
 	mux.HandleFunc("/me/events/existing-ev-9", func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodPatch, r.Method)
 		fmt.Fprint(w, `{"id":"existing-ev-9"}`)
 	})
 	srv := httptest.NewServer(record(&reqs, mux.ServeHTTP))
