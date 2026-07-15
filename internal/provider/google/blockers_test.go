@@ -141,10 +141,16 @@ func TestCreateBlockerConflictAdoptsExisting(t *testing.T) {
 	require.Equal(t, idem, eventID)
 
 	reqs := rec.all()
-	require.Len(t, reqs, 2)
+	require.Len(t, reqs, 3)
 	require.Equal(t, http.MethodPost, reqs[0].Method)
 	require.Equal(t, http.MethodGet, reqs[1].Method, "409 後は events.get で実在確認する")
 	require.Equal(t, "/calendars/primary/events/"+idem, reqs[1].Path)
+	// クラッシュ再実行の収容では既存ブロッカーの内容が古い可能性があるため、
+	// 作成しようとしていた内容で patch してから ID を返す(スペック 2026-07-15 §5)
+	require.Equal(t, http.MethodPatch, reqs[2].Method)
+	require.Equal(t, "/calendars/primary/events/"+idem, reqs[2].Path)
+	pm := decodeBody(t, reqs[2].Body)
+	require.Equal(t, "予定あり", pm["summary"])
 }
 
 // 409 収容が cancelled(削除済み)イベントの ID を無条件に返すと、busy→free→busy の
@@ -225,7 +231,7 @@ func TestUpdateBlockerPatchesTimesAndDescription(t *testing.T) {
 	c := newTestClient(t, handler)
 
 	b := model.Blocker{
-		Title:    "予定あり", // patch には含めない(時刻変更のみ)
+		Title:    "経営会議", // detail_sync 対応で patch にも summary を含める(スペック 2026-07-15 §5)
 		StartUTC: time.Date(2026, 7, 11, 3, 0, 0, 0, time.UTC),
 		EndUTC:   time.Date(2026, 7, 11, 4, 0, 0, 0, time.UTC),
 	}
@@ -238,7 +244,9 @@ func TestUpdateBlockerPatchesTimesAndDescription(t *testing.T) {
 	require.Equal(t, "/calendars/primary/events/ev-blk-1", reqs[0].Path)
 
 	m := decodeBody(t, reqs[0].Body)
-	require.ElementsMatch(t, []string{"start", "end", "description"}, mapKeys(m), "patch は start/end のみ")
+	require.ElementsMatch(t, []string{"start", "end", "description", "summary"}, mapKeys(m),
+		"patch は start/end/description/summary(detail_sync のタイトル追従)")
+	require.Equal(t, "経営会議", m["summary"])
 	start, ok := m["start"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "2026-07-11T03:00:00Z", start["dateTime"])

@@ -104,6 +104,13 @@ func (c *Client) CreateBlocker(ctx context.Context, cal model.CalendarRef, b mod
 			return "", fmt.Errorf("google[%s]: confirm existing blocker %s: %w", c.accountID, idemKey, normalizeAuthErr(err))
 		}
 		if existing.Status != "cancelled" {
+			// クラッシュ再実行の 409 収容では、停止中に origin の内容が変わって
+			// いる可能性がある(mappings には新しいハッシュが保存されるため、
+			// ここで揃えないと食い違いが次の変更まで固定化する)。作成しようと
+			// していた内容で patch してから返す(スペック 2026-07-15 §5)
+			if err := c.UpdateBlocker(ctx, cal, existing.Id, b); err != nil {
+				return "", fmt.Errorf("google[%s]: align existing blocker %s: %w", c.accountID, idemKey, err)
+			}
 			return existing.Id, nil
 		}
 		// Status を明示的に confirmed へ戻す(update ボディの status 省略時に
@@ -124,7 +131,9 @@ func (c *Client) CreateBlocker(ctx context.Context, cal model.CalendarRef, b mod
 	return "", fmt.Errorf("google[%s]: events.insert %s: %w", c.accountID, cal, normalizeAuthErr(err))
 }
 
-// UpdateBlocker は events.patch で start/end のみ更新する(タイトル等は送らない)。
+// UpdateBlocker は events.patch で start/end/summary/description を更新する。
+// summary は detail_sync のタイトル追従・復帰のため常に送る(エンジン側の
+// フォールバックにより常に非空 — スペック 2026-07-15 §5)。
 // 404(ブロッカーが手動削除等で消えている)は provider.ErrNotFound に写像し、
 // エンジン側が「pending 化して再作成」にフォールバックできるようにする(仕様8章4)。
 func (c *Client) UpdateBlocker(ctx context.Context, cal model.CalendarRef, eventID string, b model.Blocker) error {
@@ -133,6 +142,7 @@ func (c *Client) UpdateBlocker(ctx context.Context, cal model.CalendarRef, event
 		return err
 	}
 	patch := &calendar.Event{
+		Summary:     b.Title,
 		Start:       blockerStart(b),
 		End:         blockerEnd(b),
 		Description: b.Description,
