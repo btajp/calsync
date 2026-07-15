@@ -348,6 +348,132 @@ notifications:
 			yaml:    minimalYAML + "\nnotifications:\n  slack:\n    channel: \"C1\"\n    morning_digest: \"07:30\"\n    webhook_url: \"https://x\"\n",
 			wantErr: "webhook_url",
 		},
+		{
+			name: "detail_sync pairs are parsed and normalized",
+			yaml: `
+accounts:
+  - id: a
+    provider: google
+    email: a@gmail.com
+  - id: b
+    provider: google
+    email: b@gmail.com
+detail_sync:
+  - from: a
+    to: b
+    fields: [title, description]
+  - from: b
+    to: a
+    fields: [title]
+`,
+			check: func(t *testing.T, c *Config) {
+				require.Equal(t, []DetailSyncPair{
+					{From: "a", To: "b", Title: true, Description: true},
+					{From: "b", To: "a", Title: true},
+				}, c.DetailSync)
+			},
+		},
+		{
+			name: "detail_sync unknown account is rejected",
+			yaml: minimalYAML + `
+detail_sync:
+  - from: typo
+    to: personal
+    fields: [title]
+`,
+			wantErr: `detail_sync[0]: unknown account "typo"`,
+		},
+		{
+			name: "detail_sync from==to is rejected",
+			yaml: minimalYAML + `
+detail_sync:
+  - from: personal
+    to: personal
+    fields: [title]
+`,
+			wantErr: "from and to must differ",
+		},
+		{
+			name: "detail_sync duplicate pair is rejected",
+			yaml: `
+accounts:
+  - id: a
+    provider: google
+    email: a@gmail.com
+  - id: b
+    provider: google
+    email: b@gmail.com
+detail_sync:
+  - from: a
+    to: b
+    fields: [title]
+  - from: a
+    to: b
+    fields: [description]
+`,
+			wantErr: `duplicate pair "a" => "b"`,
+		},
+		{
+			name: "detail_sync invalid field is rejected",
+			yaml: `
+accounts:
+  - id: a
+    provider: google
+    email: a@gmail.com
+  - id: b
+    provider: google
+    email: b@gmail.com
+detail_sync:
+  - from: a
+    to: b
+    fields: [location]
+`,
+			wantErr: `invalid field "location" (want title or description)`,
+		},
+		{
+			name: "detail_sync empty fields is rejected",
+			yaml: `
+accounts:
+  - id: a
+    provider: google
+    email: a@gmail.com
+  - id: b
+    provider: google
+    email: b@gmail.com
+detail_sync:
+  - from: a
+    to: b
+    fields: []
+`,
+			wantErr: "fields must not be empty",
+		},
+		{
+			name: "detail_sync duplicate field is rejected",
+			yaml: `
+accounts:
+  - id: a
+    provider: google
+    email: a@gmail.com
+  - id: b
+    provider: google
+    email: b@gmail.com
+detail_sync:
+  - from: a
+    to: b
+    fields: [title, title]
+`,
+			wantErr: `duplicate field "title"`,
+		},
+		{
+			name: "detail_sync unknown key is rejected by KnownFields",
+			yaml: minimalYAML + `
+detail_sync:
+  - form: personal
+    to: personal
+    fields: [title]
+`,
+			wantErr: "field form not found",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -444,4 +570,30 @@ accounts:
 	require.NoError(t, err)
 	require.True(t, cfg.Accounts[0].ShowOriginInDescription)
 	require.False(t, cfg.Accounts[1].ShowOriginInDescription, "既定は false")
+}
+
+func TestDetailSyncFor(t *testing.T) {
+	src := `
+accounts:
+  - id: a
+    provider: google
+    email: a@gmail.com
+  - id: b
+    provider: google
+    email: b@gmail.com
+detail_sync:
+  - from: a
+    to: b
+    fields: [title]
+`
+	cfg, err := Load(writeConfig(t, src))
+	require.NoError(t, err)
+
+	p := cfg.DetailSyncFor("a", "b")
+	require.NotNil(t, p)
+	require.True(t, p.Title)
+	require.False(t, p.Description)
+
+	require.Nil(t, cfg.DetailSyncFor("b", "a"), "方向は一方通行(逆方向は別エントリ)")
+	require.Nil(t, cfg.DetailSyncFor("a", "missing"))
 }

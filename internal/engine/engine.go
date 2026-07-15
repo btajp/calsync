@@ -198,8 +198,9 @@ func (e *Engine) upsertBlockers(ctx context.Context, ref model.CalendarRef, ev m
 // mapping あり・time_hash 不一致 → UpdateBlocker(patch)。404 は再作成にフォールバック
 // mapping あり・一致 → 何もしない
 func (e *Engine) upsertBlockerOnTarget(ctx context.Context, ref model.CalendarRef, ev model.NormalizedEvent, target config.Account, originTag, timeHash string) error {
-	// description ポリシーを合成した変更検出ハッシュ(トグルの遡及反映用。Issue #7)
-	timeHash = e.policyHashFor(timeHash, target.ID)
+	// description ポリシー(Issue #7)と detail_sync 内容成分(スペック 2026-07-15 §3)を
+	// 合成した変更検出ハッシュ。トグル・内容変更の両方が「不一致」として検出される
+	timeHash = e.policyHashFor(timeHash, target.ID) + e.detailComponentFor(ref.AccountID, target.ID, ev)
 	m, err := e.Store.GetMapping(ref.AccountID, ref.CalendarID, ev.ID, target.ID)
 	if err != nil {
 		return err
@@ -338,6 +339,28 @@ func (e *Engine) policyHashFor(timeHash, targetAccountID string) string {
 	return timeHash
 }
 
+// detailHashSentinel は収容・再構築経路(rebuildMappingsFromTags / adoptOrphan)で
+// 保存する内容成分の仮値(スペック 2026-07-15 §6)。ListBlockers はブロッカーの実時刻
+// しか返せず内容成分を再現できないため、実ハッシュ(hex)とも素のハッシュとも決して
+// 一致しないこの値を置き、直後の FullResync 再処理で必ず 1 回 patch を走らせて
+// 正しい内容+正規ハッシュに自己修復させる。ペア未設定の行にも無条件で付与する
+// (ペア解除 → 反映前に DB 全損 → 再構築、で転記内容が残留する穴を塞ぐ。
+// 代償は再構築行への 1 回限りの patch のみ)。
+const detailHashSentinel = "+detail:unknown"
+
+// detailComponentFor は detail_sync ペアの内容成分("+detail:<16hex>")を返す。
+// ペア未設定なら空文字 = 保存ハッシュは従来値と完全一致(スペック 2026-07-15 §3 の
+// 無風保証)。フラグではなく内容そのものをハッシュに入れるため、origin のタイトル/
+// 説明変更が次の差分同期でハッシュ不一致 → patch として伝搬する。
+// 合成は必ず policyHashFor の出力の末尾に行う(合成順が経路間でブレると永久不一致になる)。
+func (e *Engine) detailComponentFor(originID, targetID string, ev model.NormalizedEvent) string {
+	p := e.Cfg.DetailSyncFor(originID, targetID)
+	if p == nil {
+		return ""
+	}
+	return "+detail:" + model.DetailHash(p.Title, p.Description, ev.Title, ev.Description)
+}
+
 func (e *Engine) blockerFor(ctx context.Context, ev model.NormalizedEvent, originTag string, targetCal model.CalendarRef, p provider.Provider) (model.Blocker, error) {
 	tz := ""
 	if ev.IsAllDay {
@@ -347,8 +370,26 @@ func (e *Engine) blockerFor(ctx context.Context, ev model.NormalizedEvent, origi
 			return model.Blocker{}, err
 		}
 	}
+	title := e.Cfg.BlockerTitle
+	desc := e.descriptionFor(targetCal.AccountID, originTag)
+	originID, _, _ := strings.Cut(originTag, ":")
+	if pol := e.Cfg.DetailSyncFor(originID, targetCal.AccountID); pol != nil {
+		// detail_sync ペア(スペック 2026-07-15 §4): タイトル/説明を元イベントから転記。
+		// 空タイトルは blocker_title へフォールバック(events キャッシュの旧行が
+		// 加温前でも壊れない。ハッシュには空文字ベースの成分が入るため加温後に自己修復)
+		if pol.Title && ev.Title != "" {
+			title = ev.Title
+		}
+		if pol.Description && ev.Description != "" {
+			if desc != "" {
+				desc = ev.Description + "\n\n" + desc // show_origin の origin 行は末尾に併記
+			} else {
+				desc = ev.Description
+			}
+		}
+	}
 	return model.Blocker{
-		Title:          e.Cfg.BlockerTitle,
+		Title:          title,
 		StartUTC:       ev.StartUTC,
 		EndUTC:         ev.EndUTC,
 		IsAllDay:       ev.IsAllDay,
@@ -356,7 +397,7 @@ func (e *Engine) blockerFor(ctx context.Context, ev model.NormalizedEvent, origi
 		AllDayEnd:      ev.AllDayEnd,
 		TargetTimezone: tz,
 		OriginTag:      originTag,
-		Description:    e.descriptionFor(targetCal.AccountID, originTag),
+		Description:    desc,
 	}, nil
 }
 

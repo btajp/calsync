@@ -191,3 +191,29 @@ func TestWindowContains(t *testing.T) {
 		})
 	}
 }
+
+// DetailHash は detail_sync ペアの内容変更検出用成分(スペック 2026-07-15 §3)。
+func TestDetailHash(t *testing.T) {
+	base := DetailHash(true, true, "A", "B")
+	require.Len(t, base, 16)
+	require.Equal(t, base, DetailHash(true, true, "A", "B"), "決定的であること")
+
+	// 有効フィールドの内容変更で変化する
+	require.NotEqual(t, base, DetailHash(true, true, "A2", "B"))
+	require.NotEqual(t, base, DetailHash(true, true, "A", "B2"))
+
+	// フィールド構成(fields)の変更で変化する(設定トグルの遡及反映のトリガー)
+	require.NotEqual(t, DetailHash(true, false, "A", ""), DetailHash(true, true, "A", ""))
+
+	// 無効フィールドの内容は影響しない(fields=[title] なら description 変更は不変)
+	require.Equal(t, DetailHash(true, false, "A", "B"), DetailHash(true, false, "A", "C"))
+
+	// 境界衝突耐性(スペック §3): 値を生連結すると同一になる組が、異なるハッシュになる
+	require.NotEqual(t,
+		DetailHash(true, true, "A|description|B", ""),
+		DetailHash(true, true, "A", "B"))
+
+	// 空タイトルは「空文字ベース」の値になる(表示側フォールバック値ではない — スペック §4。
+	// events キャッシュ加温後にハッシュ不一致 → 自動修復が成立するための前提)
+	require.NotEqual(t, DetailHash(true, false, "", ""), DetailHash(true, false, "予定あり", ""))
+}

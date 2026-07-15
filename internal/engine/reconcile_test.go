@@ -241,7 +241,9 @@ func TestReconcile_AdoptsOrphanWhenOriginAlive(t *testing.T) {
 	require.NotNil(t, m)
 	require.Equal(t, store.StatusActive, m.Status)
 	require.Equal(t, "orphan-b1", m.BlockerEventID)
-	require.Equal(t, model.TimeHash(ev), m.TimeHash)
+	// 収容時は内容成分を再現できないため sentinel 付きで保存される(スペック 2026-07-15 §6)。
+	// origin のフル同期が失敗しているので修復 patch は次回に持ち越される
+	require.Equal(t, model.TimeHash(ev)+"+detail:unknown", m.TimeHash)
 	require.Equal(t, model.MSTransactionID(tag, "b"), m.IdempotencyKey)
 	blks := f.Blockers(calBv)
 	require.Len(t, blks, 1)
@@ -767,4 +769,75 @@ func TestReconcileCleansOldReminderRecords(t *testing.T) {
 	sent, err = e.Store.WasReminderSent(refA, "recent", recent)
 	require.NoError(t, err)
 	require.True(t, sent)
+}
+
+// ---- detail_sync: 収容・再構築経路の sentinel(スペック 2026-07-15 §6) ----
+
+// タグ再構築(フェーズ0)は sentinel 付きで収容し、同一リコンサイル内の FullResync
+// 再処理で 1 回だけ patch されて正しい内容+正規ハッシュに自己修復する。
+// sentinel はペア設定の有無に関わらず付与される(ペア解除 → DB 全損 → 再構築の
+// 経路で転記内容が残留するプライバシー穴を塞ぐ)。
+func TestReconcile_RebuildSelfHealsBlockerContent(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	ev := busyEvent("ev1")
+	ev.Title = "経営会議"
+	tag := model.OriginTagOf("a", "ev1")
+
+	// DB 全損相当: mappings は空だが、b 上に「転記タイトル付き」ブロッカーが残っている
+	// (ペア設定があった時期に作られた想定)。origin はフル同期で生きている
+	f.SetFullState(refA, []model.NormalizedEvent{ev})
+	f.SetFullState(calBv, nil)
+	f.SetFullState(calCv, nil)
+	blkID, err := f.CreateBlocker(ctx, calBv, model.Blocker{
+		Title: "経営会議", StartUTC: ev.StartUTC, EndUTC: ev.EndUTC, OriginTag: tag,
+	}, model.MSTransactionID(tag, "b"))
+	require.NoError(t, err)
+
+	// ペアは現在「未設定」= 復帰の期待値は既定内容
+	require.NoError(t, e.Reconcile(ctx))
+
+	// 転記タイトルが既定の「予定あり」へ復帰し、ハッシュも正規値(素の TimeHash)になる
+	body, ok := f.StoredBlocker(calBv, blkID)
+	require.True(t, ok)
+	require.Equal(t, "予定あり", body.Title)
+	m, err := e.Store.GetMapping("a", "primary", "ev1", "b")
+	require.NoError(t, err)
+	require.Equal(t, store.StatusActive, m.Status)
+	require.Equal(t, model.TimeHash(ev), m.TimeHash, "修復後は sentinel が消えて正規ハッシュ")
+
+	// 2 回目のリコンサイルでは patch が走らない(1 回限りの自己修復)
+	f.SeedBlocker(calBv, model.BlockerRecord{EventID: blkID, OriginTag: tag, TimeHash: "tampered"})
+	require.NoError(t, e.Reconcile(ctx))
+	require.Equal(t, "tampered", f.Blockers(calBv)[0].TimeHash, "2 回目は呼び出しなし")
+}
+
+// ペア設定ありでも同様: 再構築 → FullResync で転記内容+正規ハッシュに収斂する
+func TestReconcile_RebuildSelfHealsWithDetailSyncPair(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	enableDetailSync(e, "a", "b", true, false)
+	ev := busyEvent("ev1")
+	ev.Title = "経営会議"
+	tag := model.OriginTagOf("a", "ev1")
+
+	f.SetFullState(refA, []model.NormalizedEvent{ev})
+	f.SetFullState(calBv, nil)
+	f.SetFullState(calCv, nil)
+	// 古い既定タイトルのままのブロッカーが残っている(ペア設定前に作られた想定)
+	blkID, err := f.CreateBlocker(ctx, calBv, model.Blocker{
+		Title: "予定あり", StartUTC: ev.StartUTC, EndUTC: ev.EndUTC, OriginTag: tag,
+	}, model.MSTransactionID(tag, "b"))
+	require.NoError(t, err)
+
+	require.NoError(t, e.Reconcile(ctx))
+
+	body, ok := f.StoredBlocker(calBv, blkID)
+	require.True(t, ok)
+	require.Equal(t, "経営会議", body.Title, "再構築後の修復 patch で転記タイトルになる")
+	m, err := e.Store.GetMapping("a", "primary", "ev1", "b")
+	require.NoError(t, err)
+	require.Equal(t,
+		model.TimeHash(ev)+"+detail:"+model.DetailHash(true, false, ev.Title, ev.Description),
+		m.TimeHash)
 }

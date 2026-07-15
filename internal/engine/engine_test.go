@@ -616,3 +616,208 @@ func TestFullResync_AppliesDescriptionPolicyRetroactively(t *testing.T) {
 	require.True(t, ok)
 	require.Empty(t, b2.Description, "トグル OFF で description はクリアされる")
 }
+
+// ---- detail_sync: ペア別タイトル/説明同期(スペック 2026-07-15) ----
+
+// enableDetailSync はテスト用に (from, to) ペアの detail_sync を設定する。
+func enableDetailSync(e *Engine, from, to string, title, description bool) {
+	e.Cfg.DetailSync = append(e.Cfg.DetailSync,
+		config.DetailSyncPair{From: from, To: to, Title: title, Description: description})
+}
+
+func detailEvent(id string) model.NormalizedEvent {
+	ev := busyEvent(id)
+	ev.Title = "経営会議"
+	ev.Description = "資料: https://example.com/doc"
+	return ev
+}
+
+// ペア設定した c だけタイトル/説明が転記され、未設定の b は従来どおり(無風保証込み)
+func TestUpsertBlockers_DetailSyncPerPair(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	enableDetailSync(e, "a", "c", true, true) // a => c のみ
+
+	ev := detailEvent("ev1")
+	require.NoError(t, e.processEvent(ctx, refA, ev))
+
+	// c: タイトル・説明とも転記される
+	blksC := f.Blockers(calCv)
+	require.Len(t, blksC, 1)
+	bc, ok := f.StoredBlocker(calCv, blksC[0].EventID)
+	require.True(t, ok)
+	require.Equal(t, "経営会議", bc.Title)
+	require.Equal(t, "資料: https://example.com/doc", bc.Description)
+
+	// b: 従来どおり固定タイトル・説明なし(完全匿名)
+	blksB := f.Blockers(calBv)
+	require.Len(t, blksB, 1)
+	bb, ok := f.StoredBlocker(calBv, blksB[0].EventID)
+	require.True(t, ok)
+	require.Equal(t, "予定あり", bb.Title)
+	require.Empty(t, bb.Description)
+
+	// ハッシュ: c は "+detail:" 成分入り、b は素の TimeHash(無風保証の回帰テスト)
+	mc, err := e.Store.GetMapping("a", "primary", "ev1", "c")
+	require.NoError(t, err)
+	wantC := model.TimeHash(ev) + "+detail:" + model.DetailHash(true, true, ev.Title, ev.Description)
+	require.Equal(t, wantC, mc.TimeHash)
+	mb, err := e.Store.GetMapping("a", "primary", "ev1", "b")
+	require.NoError(t, err)
+	require.Equal(t, model.TimeHash(ev), mb.TimeHash, "ペア未設定の保存ハッシュは従来と完全同一")
+}
+
+// origin のタイトルだけ変わった(時刻不変)とき、ペア先のブロッカーが次の処理で patch される
+func TestProcessEvent_DetailTitleChangePropagates(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	enableDetailSync(e, "a", "c", true, false)
+
+	ev := detailEvent("ev1")
+	require.NoError(t, e.processEvent(ctx, refA, ev))
+	origID := f.Blockers(calCv)[0].EventID
+
+	renamed := ev
+	renamed.Title = "経営会議(リスケ)"
+	require.NoError(t, e.processEvent(ctx, refA, renamed))
+
+	blks := f.Blockers(calCv)
+	require.Len(t, blks, 1)
+	require.Equal(t, origID, blks[0].EventID, "patch であって再作成ではない")
+	bc, ok := f.StoredBlocker(calCv, origID)
+	require.True(t, ok)
+	require.Equal(t, "経営会議(リスケ)", bc.Title)
+
+	// fields=[title] なので description の変更ではハッシュが変わらない(=呼び出しなし)
+	descOnly := renamed
+	descOnly.Description = "別の本文"
+	f.SeedBlocker(calCv, model.BlockerRecord{
+		EventID: origID, OriginTag: blks[0].OriginTag, TimeHash: "tampered",
+	})
+	require.NoError(t, e.processEvent(ctx, refA, descOnly))
+	after := f.Blockers(calCv)
+	require.Equal(t, "tampered", after[0].TimeHash, "無効フィールドの変更ではプロバイダを呼ばない")
+}
+
+// 元タイトルが空のときは blocker_title へフォールバックする(スペック §4)
+func TestBlockerFor_EmptyTitleFallsBackToBlockerTitle(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	enableDetailSync(e, "a", "c", true, false)
+
+	ev := busyEvent("ev1") // Title は空
+	require.NoError(t, e.processEvent(ctx, refA, ev))
+
+	bc, ok := f.StoredBlocker(calCv, f.Blockers(calCv)[0].EventID)
+	require.True(t, ok)
+	require.Equal(t, "予定あり", bc.Title)
+
+	// ハッシュは空文字ベースの detail 成分入り(素の TimeHash とは異なる。
+	// キャッシュ加温で実タイトルが入ればハッシュ不一致 → 自動修復される前提)
+	mc, err := e.Store.GetMapping("a", "primary", "ev1", "c")
+	require.NoError(t, err)
+	require.Equal(t, model.TimeHash(ev)+"+detail:"+model.DetailHash(true, false, "", ""), mc.TimeHash)
+}
+
+// description 転記と show_origin_in_description の併記(スペック §4)
+func TestUpsertBlockers_DetailDescriptionWithOriginLine(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	enableDetailSync(e, "a", "c", false, true)
+	enableOriginDescription(e, "c", true)
+
+	ev := detailEvent("ev1")
+	require.NoError(t, e.processEvent(ctx, refA, ev))
+	bc, ok := f.StoredBlocker(calCv, f.Blockers(calCv)[0].EventID)
+	require.True(t, ok)
+	require.Equal(t, "資料: https://example.com/doc\n\ncalsync: ミラー元アカウント = a", bc.Description)
+	require.Equal(t, "予定あり", bc.Title, "fields=[description] ではタイトルは転記しない")
+
+	// "+desc"(show_origin)の後に "+detail:" が付く固定順(スペック §3 の合成順)
+	mc, err := e.Store.GetMapping("a", "primary", "ev1", "c")
+	require.NoError(t, err)
+	require.Equal(t,
+		model.TimeHash(ev)+"+desc"+"+detail:"+model.DetailHash(false, true, ev.Title, ev.Description),
+		mc.TimeHash)
+
+	// 元説明が空なら origin 行のみ
+	empty := busyEvent("ev2")
+	require.NoError(t, e.processEvent(ctx, refA, empty))
+	var ev2Blocker string
+	for _, rec := range f.Blockers(calCv) {
+		if rec.OriginTag == model.OriginTagOf("a", "ev2") {
+			ev2Blocker = rec.EventID
+		}
+	}
+	bc2, ok := f.StoredBlocker(calCv, ev2Blocker)
+	require.True(t, ok)
+	require.Equal(t, "calsync: ミラー元アカウント = a", bc2.Description)
+}
+
+// 設定トグルの遡及反映(FullResync 経由)と、冪等キー・件数の不変(スペック §5 の中核主張)
+func TestFullResync_DetailSyncTogglesRetroactively(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+
+	// ペア未設定で作成(既存運用状態)
+	ev := detailEvent("ev1")
+	f.SetFullState(refA, []model.NormalizedEvent{ev})
+	require.NoError(t, e.SyncCalendar(ctx, refA))
+	blks := f.Blockers(calCv)
+	require.Len(t, blks, 1)
+	b0, _ := f.StoredBlocker(calCv, blks[0].EventID)
+	require.Equal(t, "予定あり", b0.Title)
+	m0, err := e.Store.GetMapping("a", "primary", "ev1", "c")
+	require.NoError(t, err)
+
+	// ペア ON → リコンサイル(FullResync)で既存ブロッカーに遡及反映
+	enableDetailSync(e, "a", "c", true, true)
+	require.NoError(t, e.FullResync(ctx, refA))
+	b1, ok := f.StoredBlocker(calCv, blks[0].EventID)
+	require.True(t, ok)
+	require.Equal(t, "経営会議", b1.Title)
+	require.Equal(t, "資料: https://example.com/doc", b1.Description)
+
+	// ペア OFF → 既定内容へ復帰(タイトル・説明とも)
+	e.Cfg.DetailSync = nil
+	require.NoError(t, e.FullResync(ctx, refA))
+	b2, ok := f.StoredBlocker(calCv, blks[0].EventID)
+	require.True(t, ok)
+	require.Equal(t, "予定あり", b2.Title)
+	require.Empty(t, b2.Description)
+
+	// 冪等キーとブロッカー件数はトグル前後で不変(二重作成しない — スペック §5)
+	m2, err := e.Store.GetMapping("a", "primary", "ev1", "c")
+	require.NoError(t, err)
+	require.Equal(t, m0.IdempotencyKey, m2.IdempotencyKey)
+	require.Equal(t, blks[0].EventID, m2.BlockerEventID)
+	require.Len(t, f.Blockers(calCv), 1)
+	require.Equal(t, model.TimeHash(ev), m2.TimeHash, "OFF に戻せば保存ハッシュも従来値へ戻る")
+}
+
+// suppressed 昇格時も転記内容で作成される(全経路共通ヘルパの検証 — スペック §4)
+func TestPromoteSuppressed_UsesDetailSyncContent(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	enableDetailSync(e, "a", "c", true, false)
+
+	ev := detailEvent("ev1")
+	// c に同一会議の実予定(同 iCalUID・同開始)を置く → c への配布は suppressed になる
+	dup := ev
+	dup.ID = "dup1"
+	require.NoError(t, e.Store.UpsertCalendar(calCv))
+	require.NoError(t, e.Store.UpsertEvent(calCv, dup))
+	require.NoError(t, e.processEvent(ctx, refA, ev))
+	m, err := e.Store.GetMapping("a", "primary", "ev1", "c")
+	require.NoError(t, err)
+	require.Equal(t, store.StatusSuppressed, m.Status)
+
+	// 実予定が消えた → 昇格。作成されるブロッカーは転記タイトル
+	require.NoError(t, e.Store.DeleteEvent(calCv, "dup1"))
+	require.NoError(t, e.promoteSuppressed(ctx, "c", ev.ICalUID))
+	blks := f.Blockers(calCv)
+	require.Len(t, blks, 1)
+	bc, ok := f.StoredBlocker(calCv, blks[0].EventID)
+	require.True(t, ok)
+	require.Equal(t, "経営会議", bc.Title)
+}
