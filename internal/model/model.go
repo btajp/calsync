@@ -5,6 +5,7 @@ import (
 	"encoding/base32"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -66,6 +67,26 @@ func TimeHash(ev NormalizedEvent) string {
 		s = ev.StartUTC.UTC().Format(time.RFC3339) + "|" + ev.EndUTC.UTC().Format(time.RFC3339)
 	}
 	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// DetailHash は detail_sync ペアの内容変更検出用成分(16桁hex。スペック 2026-07-15 §3)。
+// 有効フィールドを正規順(title → description)で "<name>=<sha256hex(value)>" に写して
+// "|" 連結した文字列をハッシュする。値を個別に sha256(64桁hex 全体)してから連結する
+// のは、タイトルに "|description|" のような区切り文字列が含まれても隣接フィールドと
+// 境界衝突しないため(TimeHash の "|" 連結は値が固定形式の時刻なので安全だが、
+// ここは自由文字列が載る)。
+func DetailHash(syncTitle, syncDescription bool, title, description string) string {
+	var parts []string
+	if syncTitle {
+		sum := sha256.Sum256([]byte(title))
+		parts = append(parts, "title="+hex.EncodeToString(sum[:]))
+	}
+	if syncDescription {
+		sum := sha256.Sum256([]byte(description))
+		parts = append(parts, "description="+hex.EncodeToString(sum[:]))
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:])[:16]
 }
 
