@@ -339,6 +339,15 @@ func (e *Engine) policyHashFor(timeHash, targetAccountID string) string {
 	return timeHash
 }
 
+// detailHashSentinel は収容・再構築経路(rebuildMappingsFromTags / adoptOrphan)で
+// 保存する内容成分の仮値(スペック 2026-07-15 §6)。ListBlockers はブロッカーの実時刻
+// しか返せず内容成分を再現できないため、実ハッシュ(hex)とも素のハッシュとも決して
+// 一致しないこの値を置き、直後の FullResync 再処理で必ず 1 回 patch を走らせて
+// 正しい内容+正規ハッシュに自己修復させる。ペア未設定の行にも無条件で付与する
+// (ペア解除 → 反映前に DB 全損 → 再構築、で転記内容が残留する穴を塞ぐ。
+// 代償は再構築行への 1 回限りの patch のみ)。
+const detailHashSentinel = "+detail:unknown"
+
 // detailComponentFor は detail_sync ペアの内容成分("+detail:<16hex>")を返す。
 // ペア未設定なら空文字 = 保存ハッシュは従来値と完全一致(スペック 2026-07-15 §3 の
 // 無風保証)。フラグではなく内容そのものをハッシュに入れるため、origin のタイトル/
