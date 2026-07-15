@@ -41,6 +41,7 @@ docker compose config -q             # compose 構文チェック
 
 ## ドキュメント規約
 
+- **このリポジトリは公開(public)である。実環境の識別子をリポジトリに書かない**: ツールは公開・個々人の設定はローカル(`data/` は gitignore)がこのアプリの設計。メールアドレス・実在のアカウント id(`data/calsync.yaml` の `id`)・カレンダー名/ID・個人の URL(Zoom パーソナルリンク等)・ホームディレクトリのパスを、docs・仕様書の設定例や実測記録・コミットメッセージ・PR 本文・テストデータのいずれにも含めてはならない。例示は汎用 id(`personal` / `work-ms` / `work-a` 等)とプレースホルダ(`user@gmail.com`・`xxxxx@group.calendar.google.com`・`zoom.us/my/example`)を使う(2026-07-16 に混入した識別子を履歴書き換えで除去した実障害あり — 再発禁止)
 - **図はすべて Mermaid**。ASCII アート図は禁止
 - コミットは Conventional Commits(feat/fix/docs/test/build/chore、英語)
 - 変更したら `CHANGELOG.md`(Keep a Changelog 形式)の `[Unreleased]` に追記
