@@ -109,7 +109,7 @@ func (c *Client) CreateBlocker(ctx context.Context, cal model.CalendarRef, b mod
 			// ここで揃えないと食い違いが次の変更まで固定化する)。作成しようと
 			// していた内容で patch してから返す(スペック 2026-07-15 §5)
 			if err := c.UpdateBlocker(ctx, cal, existing.Id, b); err != nil {
-				return "", fmt.Errorf("google[%s]: align existing blocker %s: %w", c.accountID, idemKey, err)
+				return "", fmt.Errorf("align existing blocker %s: %w", idemKey, err)
 			}
 			return existing.Id, nil
 		}
