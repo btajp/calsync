@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **docker-compose.yaml の Slack トークン受け渡しキーを `SLACK_BOT_TOKEN`(`bot_token_env` の既定値)に統一**。旧キー `SLACK_TOKEN_CALSYNC` を `.env` / `bot_token_env` で使っていた compose 利用者は、キー名を揃え直すか `bot_token_env` を明示すること(不一致だとトークンが空になり起動を拒否する)
+- README とセットアップスキル(calsync-setup)を最新化: macOS launchd ネイティブ常駐を推奨として冒頭・図・手順に反映、Slack ダイジェストの説明を v2.2 実装(色付き attachment グルーピング・上限 20 件・unfurl 抑止)に更新、コンテナ稼働中のホストからの SQLite アクセス禁止を明記、設定リファレンスに全キーへの参照を追加
+
 ### Added
 
 - **detail_sync のペア別 visibility**: `detail_sync[].visibility`(`private`(既定)/ `default` / `public`)でペアのブロッカーの公開設定を制御可能に(Google: visibility / Microsoft: sensitivity へ写像、default・public はどちらも normal)。未指定は従来どおり非公開で、既存設定への影響なし(無風)。変更は次回リコンサイルで既存ブロッカーにも遡及

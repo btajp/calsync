@@ -8,7 +8,7 @@ services:
       TZ: Asia/Tokyo
       # Slack Bot トークンの受け渡し(calsync.yaml の notifications.slack.bot_token_env と
       # 同じ変数名にする。未設定なら空 = 通知を設定していなければ影響なし)
-      SLACK_TOKEN_CALSYNC: ${SLACK_TOKEN_CALSYNC:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
     volumes:
       # calsync.yaml / SQLite / OAuth トークン / GCP クライアント JSON をここに置く
       - ./data:/data
