@@ -107,7 +107,7 @@ flowchart TD
 
 - ループ防止は mappings 一次+タグ二次のまま。**タイトルをループ判定・対応付けに使わない**(Graph delta はタグを返せない前提も不変)。
 - カーソル規律・mappings ワイプ禁止・pending → active 遷移は無変更。
-- ブロッカーの visibility=private(Google)/ sensitivity=private(Graph)は維持する。閲覧権限だけの共有相手には従来通り非公開予定としか見えない。ただし private が隠せるのは閲覧レベルの共有に対してのみで、**編集権限を持つ共有相手・組織の管理者・そのカレンダーに API アクセスできる人は転記内容を読める**(show_origin_in_description の既存注意と同じ性質)。README のプライバシー記述もこれに合わせる。
+- ブロッカーの visibility=private(Google)/ sensitivity=private(Graph)は維持する(detail_sync ペアで visibility が明示指定された場合を除く — §12)。閲覧権限だけの共有相手には従来通り非公開予定としか見えない。ただし private が隠せるのは閲覧レベルの共有に対してのみで、**編集権限を持つ共有相手・組織の管理者・そのカレンダーに API アクセスできる人は転記内容を読める**(show_origin_in_description の既存注意と同じ性質)。README のプライバシー記述もこれに合わせる。
 - suppressed mapping はハッシュ追従のみ(実体なし)。昇格時は共通ヘルパ経由で最新内容が作られる。
 
 ## 8. 既知の制限(仕様として明記)
@@ -152,3 +152,78 @@ DB スキーマ変更なし(ハッシュは opaque な TEXT、元データは ev
 - `location` 等の追加フィールド(events キャッシュ・プロバイダ層の拡張が必要。`fields` の列挙値追加で将来対応可能)
 - 配布自体のペア別抑止(exclude_pairs — v1 全体設計 §16 の別項目のまま)
 - Slack 通知の変更(影響なし)
+
+## 12. 改訂: ペア別 visibility(2026-07-15 追記・承認済み)
+
+§10 の実測投入で判明した追加要件: 内容を開示するペアでは、ブロッカーの visibility(非公開マーク)自体も制御したい。既定の匿名ブロッカーは非公開のまま。
+
+### 12.1 設定
+
+detail_sync エントリに任意キー `visibility` を追加する:
+
+```yaml
+detail_sync:
+  - from: work-b
+    to: work-a
+    fields: [title, description]
+    visibility: default   # private(既定・未指定と同義)| default | public
+```
+
+- 値は Google の語彙をそのまま使う 3 値。`private` = 現状(鍵マーク・詳細は本人と編集権限者のみ)/ `default` = カレンダーの共有設定に従う(普通の予定と同じ)/ `public` = 共有相手が時間枠のみ表示でも詳細を見せる
+- 検証: 3 値以外はエラー `config: detail_sync[%d]: invalid visibility %q (want private, default, or public)`。`DetailSyncPair.Visibility` には正規化済みの値を持つ(未指定 → "private")
+- visibility はペア(detail_sync エントリ)がある場合のみ意味を持つ。ペアなしブロッカーは常に private
+
+### 12.2 プロバイダ写像
+
+| 値 | Google(event.visibility) | Microsoft(sensitivity) |
+| --- | --- | --- |
+| private | private | private |
+| default | default | normal |
+| public | public | normal |
+
+- `model.Blocker` に `Visibility string` を追加。**空文字は private 扱い**(ペアなし経路・後方互換の安全側)
+- Google: `blockerEventBody`(insert・409 蘇生)と `UpdateBlocker` patch の両方で送る。写像後の値は常に非空なので ForceSendFields 不要
+- Microsoft: `blockerBody` の Sensitivity を写像値に(create / PATCH 共通。Graph に「公開」の段階は無いため default/public とも normal)
+- fake: body 全置換のため変更不要
+
+### 12.3 変更検知
+
+ペアの保存ハッシュに visibility 成分を追加合成する。**private(既定)のときは何も付けない**:
+
+```
+保存ハッシュ = TimeHash [+desc] [+detail:<16hex>] [+vis:<default|public>]
+```
+
+- **ハッシュ側でも空文字は private 扱い**(allowlist: `default` / `public` のときのみ `+vis:` を付与)。`config.Load` を通らずペアを直接構築するテスト等で `Visibility` がゼロ値("")でも、正規化済みの "private" と同じ「成分なし」になる — `model.Blocker.Visibility` の空文字 = private と同じ contract
+- 既存ペア(visibility 未指定 = private)はアップグレード無風(保存ハッシュ不変 — 稼働中の work-b => work-a に一斉 patch は走らない)
+- visibility の変更は次回リコンサイル(または停止中の手動 `calsync reconcile`)で既存ブロッカーへ遡及 patch(§3 と同じ意味論)
+- 合成は `detailComponentFor` 1 箇所に閉じる(vis 成分は detail 成分の直後・固定順)。sentinel(`+detail:unknown`)は canonical 値(`+detail:<hex>` または `+detail:<hex>+vis:<v>`)と決して一致しないため、収容・再構築の自己修復(§6)は従来どおり機能する
+
+### 12.4 プライバシー注意(README にも明記)
+
+`default` / `public` にすると、そのカレンダーの共有相手に転記内容が共有設定に応じて見えるようになる。これは「このペアは開示する」という明示オプトインの意図した動作。Microsoft がミラー先の場合は `default` と `public` の体感差はない(どちらも sensitivity=normal)ことも README に明記する。
+
+### 12.5 スコープ外(§11 への追記事項)
+
+- **visibility 単独指定(転記なしで公開設定だけ変える)は不可**: `fields` 非空必須(§2)は緩めない。visibility は「内容を開示するペア」の付随設定という位置づけ(本要件の出所も内容転記ペア)。需要が出たら fields の必須解除とセットで再検討
+
+### 12.6 成果物
+
+| ファイル | 内容 |
+| --- | --- |
+| `internal/config/config.go` | `detail_sync[].visibility` の受理・enum 検証・"private" 正規化 |
+| `internal/model/model.go` | `Blocker.Visibility`(空文字 = private) |
+| `internal/engine/engine.go` | `detailComponentFor` に `+vis:` 成分(private/空文字は付与なし)・`blockerFor` でペアから解決 |
+| `internal/provider/google/blockers.go` | insert/patch の visibility を写像値に |
+| `internal/provider/microsoft/blockers.go` | sensitivity を写像値に |
+| README / CHANGELOG | §12.1 の値説明・§12.4 の注意・変更履歴 |
+
+### 12.7 テスト計画
+
+- config: enum 検証 / 未指定 → "private" 正規化 / KnownFields タイポ
+- ハッシュ: visibility=private **および空文字**でハッシュが §3 の従来値と完全一致(無風の回帰テスト)/ default・public で変化し、値ごとに異なる / "+detail:" との合成順固定
+- 組み立て: Blocker.Visibility がペアから解決される / ペアなしは空文字(= private)
+- Google: insert・patch ボディの visibility(private/default/public)を httptest で検証
+- Microsoft: sensitivity 写像(private→private、default/public→normal)を httptest で検証
+- エンジン結合(fake): visibility トグルの遡及(FullResync 経由・冪等キー/件数不変)
+- ライブ検証: work-b => work-a に visibility を設定 → 停止中 reconcile → カレンダー上で鍵マークが消えることを目視確認
