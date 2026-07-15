@@ -39,6 +39,16 @@ func blockerEnd(b model.Blocker) *calendar.EventDateTime {
 	}
 }
 
+// googleVisibility は Blocker.Visibility を Google の visibility 値へ写像する。
+// 空文字(ペアなし・既定)は private = 従来の匿名ブロッカー(スペック 2026-07-15 §12.2)。
+// それ以外は config 検証済みの値(private/default/public)をそのまま使う。
+func googleVisibility(b model.Blocker) string {
+	if b.Visibility == "" {
+		return "private"
+	}
+	return b.Visibility
+}
+
 // blockerEventBody はブロッカーの本体(summary / transparency / visibility /
 // reminders / extendedProperties / start / end)を組み立てる。events.insert
 // (呼び出し元が Id を追加設定する)と、409 収容が cancelled イベントを蘇生させる
@@ -48,7 +58,7 @@ func blockerEventBody(b model.Blocker) *calendar.Event {
 		Summary:      b.Title,
 		Description:  b.Description,
 		Transparency: "opaque",
-		Visibility:   "private",
+		Visibility:   googleVisibility(b),
 		Start:        blockerStart(b),
 		End:          blockerEnd(b),
 		Reminders: &calendar.EventReminders{
@@ -143,6 +153,7 @@ func (c *Client) UpdateBlocker(ctx context.Context, cal model.CalendarRef, event
 	}
 	patch := &calendar.Event{
 		Summary:     b.Title,
+		Visibility:  googleVisibility(b),
 		Start:       blockerStart(b),
 		End:         blockerEnd(b),
 		Description: b.Description,
