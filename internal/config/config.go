@@ -24,6 +24,7 @@ type Config struct {
 	Notifications     NotificationsConfig
 	Providers         ProvidersConfig
 	Accounts          []Account
+	DetailSync        []DetailSyncPair
 }
 
 type ProvidersConfig struct {
@@ -59,6 +60,15 @@ type Account struct {
 	ShowOriginInDescription bool `yaml:"show_origin_in_description"`
 }
 
+// DetailSyncPair は detail_sync の 1 エントリ(スペック 2026-07-15 §2)。
+// origin(From)→ target(To)アカウントの一方通行のペアで、指定したペアに限り
+// ブロッカーのタイトル/説明を元イベントから転記する(既定は完全匿名のまま)。
+// fields は検証時に bool へ正規化する(正規順 title → description はハッシュ側で担保)。
+type DetailSyncPair struct {
+	From, To           string
+	Title, Description bool
+}
+
 // rawConfig は YAML の生の形。KnownFields(true) の照合対象になるため、
 // 受理するキーはここに列挙されたものが全て。
 type rawConfig struct {
@@ -71,6 +81,7 @@ type rawConfig struct {
 	Notifications     rawNotifications `yaml:"notifications"`
 	Providers         rawProviders     `yaml:"providers"`
 	Accounts          []rawAccount     `yaml:"accounts"`
+	DetailSync        []rawDetailSync  `yaml:"detail_sync"`
 }
 
 type rawNotifications struct {
@@ -105,6 +116,12 @@ type rawAccount struct {
 	DigestCalendars         []string `yaml:"digest_calendars"`
 	BlockerCalendar         string   `yaml:"blocker_calendar"`
 	ShowOriginInDescription bool     `yaml:"show_origin_in_description"`
+}
+
+type rawDetailSync struct {
+	From   string   `yaml:"from"`
+	To     string   `yaml:"to"`
+	Fields []string `yaml:"fields"`
 }
 
 var syncWindowRe = regexp.MustCompile(`^([0-9]+)(mo|d)$`)
@@ -293,6 +310,47 @@ func Load(path string) (*Config, error) {
 		cfg.Accounts = append(cfg.Accounts, a)
 	}
 
+	// detail_sync の検証(スペック 2026-07-15 §2)。アカウント id の実在チェックが
+	// 必要なため、アカウントを全件読み終えた後の後検証パスで行う。
+	seenPair := make(map[string]bool, len(raw.DetailSync))
+	for i, rd := range raw.DetailSync {
+		for _, id := range []string{rd.From, rd.To} {
+			if !seen[id] {
+				return nil, fmt.Errorf("config: detail_sync[%d]: unknown account %q", i, id)
+			}
+		}
+		if rd.From == rd.To {
+			return nil, fmt.Errorf("config: detail_sync[%d]: from and to must differ (got %q)", i, rd.From)
+		}
+		// アカウント id は ":" を含まない(上で検証済み)ため区切りに使える
+		key := rd.From + ":" + rd.To
+		if seenPair[key] {
+			return nil, fmt.Errorf("config: detail_sync[%d]: duplicate pair %q => %q", i, rd.From, rd.To)
+		}
+		seenPair[key] = true
+		if len(rd.Fields) == 0 {
+			return nil, fmt.Errorf("config: detail_sync[%d]: fields must not be empty", i)
+		}
+		p := DetailSyncPair{From: rd.From, To: rd.To}
+		for _, fld := range rd.Fields {
+			switch fld {
+			case "title":
+				if p.Title {
+					return nil, fmt.Errorf("config: detail_sync[%d]: duplicate field %q", i, fld)
+				}
+				p.Title = true
+			case "description":
+				if p.Description {
+					return nil, fmt.Errorf("config: detail_sync[%d]: duplicate field %q", i, fld)
+				}
+				p.Description = true
+			default:
+				return nil, fmt.Errorf("config: detail_sync[%d]: invalid field %q (want title or description)", i, fld)
+			}
+		}
+		cfg.DetailSync = append(cfg.DetailSync, p)
+	}
+
 	return cfg, nil
 }
 
@@ -322,6 +380,17 @@ func (c *Config) AccountByID(id string) *Account {
 	for i := range c.Accounts {
 		if c.Accounts[i].ID == id {
 			return &c.Accounts[i]
+		}
+	}
+	return nil
+}
+
+// DetailSyncFor は (origin, target) ペアの detail_sync エントリを返す。無ければ nil。
+// 方向は一方通行(from => to)で、逆方向は別エントリ。
+func (c *Config) DetailSyncFor(originID, targetID string) *DetailSyncPair {
+	for i := range c.DetailSync {
+		if c.DetailSync[i].From == originID && c.DetailSync[i].To == targetID {
+			return &c.DetailSync[i]
 		}
 	}
 	return nil
