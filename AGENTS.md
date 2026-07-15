@@ -45,11 +45,12 @@ docker compose config -q             # compose 構文チェック
 - **図はすべて Mermaid**。ASCII アート図は禁止
 - コミットは Conventional Commits(feat/fix/docs/test/build/chore、英語)
 - 変更したら `CHANGELOG.md`(Keep a Changelog 形式)の `[Unreleased]` に追記
+- **機能の追加・変更・削除をしたら、README(利用手順・設定リファレンス・アンインストール手順)とアシスタントスキル(`.agents/skills/calsync-setup`・`.agents/skills/calsync-uninstall`)への影響を必ず確認し、必要な更新を同じブランチに含めること**(コードだけ進めてドキュメントを放置した結果、2026-07-16 の総点検で 20 件超の乖離が見つかった実績あり)
 - 実 API の未検証事項は仕様書 15 章のスパイクチェックリストで管理。実測で確認したら消し込む
 
 ## スキル
 
-エージェント向けスキルの実体は `.agents/skills/` にある(`.claude/skills` はそこへのシンボリックリンク)。ユーザーのセットアップ・アカウント追加を支援する際は `calsync-setup` スキルを必ず参照すること(組織/個人アカウントの分岐・ブラウザプロファイルの注意・実測済みの落とし穴を集約してある)。
+エージェント向けスキルの実体は `.agents/skills/` にある(`.claude/skills` はそこへのシンボリックリンク)。ユーザーのセットアップ・アカウント追加を支援する際は `calsync-setup` スキルを、撤去・アカウント削除・ブロッカー掃除を支援する際は `calsync-uninstall` スキルを必ず参照すること(組織/個人アカウントの分岐・順序を誤ると復元不能になる操作・実測済みの落とし穴を集約してある)。
 
 ## 既知の落とし穴(実測済み)
 

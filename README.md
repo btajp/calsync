@@ -376,6 +376,57 @@ launchctl bootout gui/$(id -u)/com.btajp.calsync
 
 YAML から消しただけの状態は `calsync doctor` と起動時ログが孤児として警告します。認証切れ等でリモートのブロッカーを消せない場合は `--force` でローカル状態だけ削除できます(ブロッカーは各カレンダーに残るため手動削除が必要です)。
 
+## アンインストール
+
+**順序が重要です。トークン(`./data`)を消す前にブロッカーを掃除してください** — リモートのブロッカー削除には各アカウントの認証が必要で、先にトークンを消すと手動削除以外の手段がなくなります。
+
+### 1. デーモンを停止する
+
+```bash
+launchctl bootout gui/$(id -u)/com.btajp.calsync   # macOS ネイティブ(launchd)
+docker compose down                                 # Docker
+```
+
+### 2. 全カレンダーからブロッカーを掃除する
+
+アカウントを 1 つずつ `accounts remove` します([アカウントの削除](#アカウントの削除)と同じ要領。このとき calsync.yaml のエントリはまだ消しません):
+
+```bash
+./calsync accounts remove <id> --config ./data/calsync.yaml --data ./data
+```
+
+全アカウントに対して実行すると、配布済み・受領済みのブロッカーがすべてのカレンダーから削除されます。認証切れ等で消せないアカウントは `--force` でスキップできますが、そのカレンダーに残ったブロッカーは手動削除が必要です。
+
+### 3. 常駐を解除する
+
+```bash
+./scripts/macos/uninstall-launchd.sh   # macOS: bootout + plist 削除(バイナリ・data/ は残る)
+docker compose down --rmi local        # Docker: イメージも消す場合
+```
+
+### 4. ローカルデータとバイナリを削除する
+
+```bash
+rm -rf ./data                  # トークン・SQLite・設定(復元不能なので順序 2 の完了後に)
+rm -f ~/.local/bin/calsync     # macOS ネイティブ運用のバイナリ(CALSYNC_BIN で変更していた場合はそのパス)
+```
+
+リポジトリの clone 自体が不要なら丸ごと削除して構いません。
+
+### 5. アカウント側のアクセス権を取り消す
+
+- **Google**: [myaccount.google.com/connections](https://myaccount.google.com/connections)(サードパーティ製アプリとサービス)で、calsync に使った OAuth クライアントのアクセス権を削除
+- **Microsoft(個人アカウント)**: [account.live.com/consent/Manage](https://account.live.com/consent/Manage) でアプリのアクセス許可を削除
+- **Microsoft(組織アカウント)**: [myapps.microsoft.com](https://myapps.microsoft.com) の該当アプリから取り消し(組織設定によっては管理者作業)
+
+### 6. (自分で作成した場合)クラウド側の登録を削除する
+
+- GCP: OAuth クライアント(calsync 専用にプロジェクトを作った場合はプロジェクトごと)を削除
+- Entra ID: アプリの登録を削除
+- Slack: 通知を使っていた場合、アプリをワークスペースから削除
+
+最後に各カレンダーを見て、ブロッカー(既定タイトル「予定あり」)が残っていないことを確認してください。
+
 ## トークン失効時(reauth_required)
 
 パスワード変更・管理者リセット・長期未使用などで refresh token は失効することがあります。失効したアカウントだけ同期が止まり(`status` に reauth_required と表示)、他のアカウントは同期を継続します。ホストで `calsync auth add <id>` を再実行すれば、次のサイクルとリコンサイルで停止期間中の差分も自動回収されます。

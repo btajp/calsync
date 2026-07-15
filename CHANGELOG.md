@@ -13,6 +13,7 @@
 
 ### Added
 
+- **アンインストール手順とアンインストール支援スキル**: README にアンインストール節(ブロッカー掃除 → 常駐解除 → データ削除 → アクセス権取り消し → クラウド側登録の削除、の安全な順序)を追加。エージェント向けに `.agents/skills/calsync-uninstall`(完全撤去・一部アカウント削除・ブロッカーのみ掃除の分岐と落とし穴を対話的にガイド)を追加
 - **detail_sync のペア別 visibility**: `detail_sync[].visibility`(`private`(既定)/ `default` / `public`)でペアのブロッカーの公開設定を制御可能に(Google: visibility / Microsoft: sensitivity へ写像、default・public はどちらも normal)。未指定は従来どおり非公開で、既存設定への影響なし(無風)。変更は次回リコンサイルで既存ブロッカーにも遡及
 - **ペア別タイトル/説明同期(`detail_sync`)**: トップレベル `detail_sync` で指定した origin => target アカウントペアに限り、ブロッカーのタイトル/説明を元イベントから転記(`fields: [title, description]` で選択)。既定は従来どおり完全匿名で、未設定なら保存ハッシュも従来と完全同一(アップグレード無風)。内容をハッシュに合成しているため元イベントの変更は次のポーリングで追従し、設定変更は次回リコンサイルで既存分にも遡及。併せて (1) Google の patch にタイトルを追加、(2) 両プロバイダの 409 復旧時に内容整合 patch を追加、(3) リコンサイル収容・再構築行は sentinel により 1 回だけ自己修復 patch されるように(ペア解除後に DB 再構築を挟んでも転記内容が残留しない)
 - **macOS ネイティブ常駐(launchd)**: Docker Desktop の VM/自動更新起因の停止を避けるため、calsync バイナリを `launchd` の LaunchAgent として直接常駐できるように(`scripts/macos/install-launchd.sh` / `uninstall-launchd.sh` / plist テンプレート)。Go コードの変更なし。Linux / Docker 運用は変更なし
