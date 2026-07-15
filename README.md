@@ -1,19 +1,21 @@
 # calsync
 
-複数の Google カレンダー / Microsoft 365(および個人 Microsoft アカウント)カレンダーを相互監視し、どれかのアカウントに Busy な予定が入ったら他の全アカウントに「予定あり」ブロッカー予定を自動作成する、セルフホスト型の OSS ツールです。Go 製シングルバイナリ、Docker で常駐します。
+複数の Google カレンダー / Microsoft 365(および個人 Microsoft アカウント)カレンダーを相互監視し、どれかのアカウントに Busy な予定が入ったら他の全アカウントに「予定あり」ブロッカー予定を自動作成する、セルフホスト型の OSS ツールです。Go 製シングルバイナリで、macOS では launchd の LaunchAgent として、Linux では Docker でそれぞれ常駐します。
 
 ```mermaid
 flowchart LR
-    A["Google アカウント A"] <--> E["calsync (Docker)"]
+    A["Google アカウント A"] <--> E["calsync (launchd / Docker)"]
     B["Microsoft アカウント B"] <--> E
     C["Google アカウント C"] <--> E
     E --> S[("SQLite (/data)")]
 ```
 
-- 既定では予定の中身は同期しません。タイトル固定(既定「予定あり」)・詳細なしのブロッカーだけを作ります(`detail_sync` で明示したペアに限りタイトル/説明を転記できます)
+- 既定では予定の中身は同期しません。タイトル固定(既定「予定あり」)・詳細なしのブロッカーだけを作ります(`detail_sync` で明示したペアに限りタイトル/説明を転記でき、`visibility` でペア別に公開設定も変更できます)
 - Google ↔ Microsoft 混在でも相互ブロックが成立します
 - ブロッカーへの再同期による無限ループは構造的に防止しています
 - 同一人物の複数アカウントが同じ会議に招待されているケースは、既定で重複ブロッカーを抑止します(`dedupe_same_meeting`)
+- 朝のダイジェストと開始前リマインドを Slack(DM またはチャンネル)へ通知できます(`notifications.slack`。既定は無効)
+- ブロッカーを配布せず朝のダイジェストにだけ載せる通知専用カレンダーを指定できます(`digest_calendars`。Google のみ)
 
 ## v1 の制約
 
@@ -21,13 +23,14 @@ flowchart LR
 - 過去方向の同期はしません。同期対象は現在〜未来 3 ヶ月(`sync_window` で変更可)です
 - 同時刻に複数の元予定があってもブロッカーはマージしません(元予定 1 : ブロッカー 1)
 - 単一インスタンス前提です。同じデータディレクトリで 2 プロセス目を起動すると flock により起動エラーになります
-- `calsync sync` / `calsync reconcile` / `calsync accounts remove` は同じデータディレクトリの排他ロックを取得するため、デーモン稼働中は実行できません(停止してから実行してください)。一方 `calsync status` / `calsync doctor` は読み取り専用で排他ロックを取得しないため、**デーモン稼働中でも実行できます**
+- `calsync sync` / `calsync reconcile` / `calsync accounts remove` は同じデータディレクトリの排他ロックを取得するため、デーモン稼働中は実行できません(停止してから実行してください)。一方 `calsync status` / `calsync doctor` は読み取り専用で排他ロックを取得しないため、デーモン稼働中でも実行できます(**ただしコンテナ運用時はホストから直接実行せず、コンテナ経由で実行してください** — [データとバックアップ](#データとバックアップ)参照)
 - アカウント間でタイムゾーンが異なる場合、終日予定は「同じ日付」の終日ブロッカーとしてミラーされます(同じ絶対時間帯ではありません)
 
 ## 必要なもの
 
 - 自分の Google Cloud(GCP)OAuth クライアント、および/または Microsoft Entra ID のアプリ登録(下記手順。calsync は共有クライアントを配布しません)
-- Docker / Docker Compose(または Go 1.25 でのローカルビルド)
+- **macOS(ネイティブ常駐・推奨)**: Go 1.25 以上(ビルドに使用)と python3(インストーラの plist 生成に使用。Xcode Command Line Tools に付属)
+- **Linux / その他**: Docker / Docker Compose(認証 `auth add` はホスト実行が基本のため、Go があると簡単です)
 
 ## セットアップ 1: Google(GCP)
 
@@ -65,9 +68,9 @@ flowchart LR
 poll_interval: 1m              # 差分ポーリング間隔
 sync_window: 3mo               # 同期ウィンドウ(未来方向)。"90d" のような日数指定も可
 blocker_title: "予定あり"       # ブロッカーの固定タイトル
-reconcile_at: "04:00"          # 日次リコンサイル時刻(コンテナの TZ で解釈)
+reconcile_at: "04:00"          # 日次リコンサイル時刻(実行環境のローカル TZ。Docker はコンテナの TZ、launchd はシステムの TZ)
 dedupe_same_meeting: true      # 同一会議の重複ブロッカー抑止
-busy_show_as: [busy, oof, tentative]   # Microsoft で Busy 扱いにする showAs 値
+busy_show_as: [busy, oof, tentative]   # Microsoft で Busy 扱いにする showAs 値(free / tentative / busy / oof / workingElsewhere / unknown から選択)
 
 providers:
   google:
@@ -86,6 +89,8 @@ accounts:
     email: user@example365.co.jp
     # Microsoft は v1 ではプライマリカレンダーのみ
 ```
+
+このほか、Slack 通知の `notifications`([Slack 通知](#slack-通知オプション))、通知専用カレンダーの `accounts[].digest_calendars`([通知専用カレンダー](#通知専用カレンダーdigest_calendars))、元アカウント表示の `accounts[].show_origin_in_description`([ブロッカーの元アカウント表示](#ブロッカーの元アカウント表示オプション))、ペア別転記の `detail_sync`([ペア別にタイトル/説明も同期する](#ペア別にタイトル説明も同期するdetail_sync))が指定できます。
 
 ## 認証(auth add)
 
@@ -207,7 +212,7 @@ docker compose start calsync
 
 | コマンド | 説明 |
 | --- | --- |
-| `calsync run` | デーモン起動(Docker の既定エントリポイント) |
+| `calsync run` | デーモン起動(Docker の既定エントリポイント。launchd の LaunchAgent もこれを起動) |
 | `calsync sync --once` | 1 回だけ同期して終了 |
 | `calsync reconcile` | フルリコンサイル手動実行(ウィンドウスライド・孤児収容・DB 再構築を含む) |
 | `calsync status` | 各カレンダーの最終同期時刻・エラー状態(reauth_required 等) |
@@ -261,11 +266,11 @@ detail_sync:
 
 ### 通知の内容(Block Kit)
 
-- **ダイジェスト**: 予定ごとに 1 ブロックで表示します。件名はその予定を作ったカレンダー上の該当イベントへのリンク(Google: `htmlLink` / Microsoft: `webLink`)になり、クリックするとカレンダー側で開きます。Zoom / Google Meet / Microsoft Teams の会議 URL が見つかった予定には「参加」ボタン(ブロックの accessory)が付きます。1 通に載る予定が 46 件を超える場合は残りを「…他 N 件」にまとめます
+- **ダイジェスト**: 予定ごとに 1 セクションで表示し、由来アカウントごとの色付きバー(`accounts` の定義順で固定パレットを巡回割当)が付きます。時系列で連続する同一アカウント色の予定は 1 つの色付きグループにまとまります。件名はその予定を作ったカレンダー上の該当イベントへのリンク(Google: `htmlLink` / Microsoft: `webLink`)になり、クリックするとカレンダー側で開きます。Zoom / Google Meet / Microsoft Teams の会議 URL が見つかった予定には「参加」ボタン(ブロックの accessory)が付きます。1 通に載る予定が 20 件を超える場合は残りを「…他 N 件」にまとめます(Block Kit を描画しない面向けのテキスト fallback は 100 件まで)。リンクのプレビュー展開(unfurl)は常に抑止します
 - **リマインド**: 件名・参加ボタンに加えて、**予定の本文(description)をプレーンテキスト化した全文**を表示します(長文は約 2,900 字で切り詰め)。Microsoft は Graph API にテキスト化させ(`Prefer: outlook.body-content-type="text"`)、Google は簡易的な HTML タグ除去で整形します
 - **会議 URL の抽出順**: まずカレンダー側の構造化フィールド(Google `conferenceData` / Microsoft `onlineMeeting`)を優先し、なければ場所(location)→本文(description)の順で `zoom.us` / `meet.google.com` / `teams.microsoft.com` の `https` URL を検出します。抽出できなかった場合は参加ボタンを付けません
 - **プレビュー表示との関係**: モバイル通知バナーや検索結果など Block Kit を描画しない面には、従来どおりのテキスト形式(件名・時刻のみ、会議 URL・本文は含みません)を fallback として送ります
-- **縮退**: Slack が blocks を不正と判定した場合(`invalid_blocks` 系のエラー)は、blocks を外したテキストのみの通知として 1 回だけ再送します
+- **縮退**: Slack が blocks / attachments を不正と判定した場合(`invalid_blocks` / `invalid_attachments` 系のエラー)は、テキストのみの通知として 1 回だけ再送します
 
 ### 設定
 
@@ -275,7 +280,7 @@ notifications:
     bot_token_env: SLACK_BOT_TOKEN  # トークンを読む環境変数名(既定 SLACK_BOT_TOKEN)。トークン自体は YAML に書きません
     channel: "C0XXXXXXX"            # C…/G… ならチャンネル、U… なら DM(conversations.open で自動解決)
                                      # Enterprise Grid のユーザー ID(W…)は v1 未対応(DM は U… のみ)
-    morning_digest: "07:30"         # 省略するとダイジェスト無効。"HH:MM"、コンテナの TZ(reconcile_at と同形式)
+    morning_digest: "07:30"         # 省略するとダイジェスト無効。"HH:MM"、実行環境のローカル TZ(reconcile_at と同形式)
     remind_before: 10m               # 省略するとリマインド無効。正の Go duration。poll_interval 以上が必須
 ```
 
@@ -358,7 +363,16 @@ docker compose run --rm --entrypoint /calsync calsync \
   accounts remove old-account --config /data/calsync.yaml --data /data
 ```
 
-`accounts remove` の完了(配布済みブロッカー削除 → 受領ブロッカー削除 → ローカル状態削除)を確認してから、calsync.yaml から `old-account` のエントリを削除し、`docker compose start calsync` してください。
+macOS ネイティブ(launchd)運用の場合:
+
+```bash
+launchctl bootout gui/$(id -u)/com.btajp.calsync
+./calsync accounts remove old-account --config ./data/calsync.yaml --data ./data
+# calsync.yaml からエントリを削除してから再起動
+./scripts/macos/install-launchd.sh
+```
+
+`accounts remove` の完了(配布済みブロッカー削除 → 受領ブロッカー削除 → ローカル状態削除)を確認してから、calsync.yaml から `old-account` のエントリを削除し、`docker compose start calsync`(または launchd の場合は上記のとおり再起動)してください。
 
 YAML から消しただけの状態は `calsync doctor` と起動時ログが孤児として警告します。認証切れ等でリモートのブロッカーを消せない場合は `--force` でローカル状態だけ削除できます(ブロッカーは各カレンダーに残るため手動削除が必要です)。
 
@@ -370,10 +384,13 @@ YAML から消しただけの状態は `calsync doctor` と起動時ログが孤
 
 calsync が作成するブロッカー予定には、ループ防止・自己修復のための拡張プロパティ(`calsync-origin` タグ)として**元アカウントの ID と元イベントの ID** が保存されます。カレンダーの UI には表示されませんが、そのカレンダーに API アクセスできる人(組織の管理者を含む)は読み取れます。アカウント ID(YAML の `id`)に見られたくない文字列を使わないでください。タイトル・本文・参加者など予定の中身は、既定では一切コピーされません(`detail_sync` で明示的にオプトインしたペアに限り、タイトル/説明が転記されます)。
 
+なお、`detail_sync` の `visibility` を `default` / `public` にしたペアは閲覧権限のみの共有相手にも転記内容が見えます([detail_sync](#ペア別にタイトル説明も同期するdetail_sync) 参照)。Slack 通知を有効にした場合は予定の件名(リマインドは本文全文も)が通知先チャンネルへ送られます([Slack 通知の制約](#制約) 参照)。
+
 ## データとバックアップ
 
 - `./data` に SQLite(状態 DB)・OAuth トークン(0600)・設定が入ります。このディレクトリだけバックアップすれば移行できます
 - DB を失っても、`calsync reconcile` がカレンダー上の calsync タグからマッピングを再構築します
+- **コンテナ運用時は、コンテナ稼働中にホストから `./data` 内の SQLite へ一切アクセスしないでください(読み取りも禁止)**。WAL のロック・共有メモリは VM 境界を跨いで機能せず、ホスト側の読み取りだけで DB が破損した実績があります。バックアップの取得やホストビルドの `calsync status` / `doctor` 実行はコンテナ停止中に行い、稼働中の状態確認は `docker compose logs` か `docker exec calsync /calsync status --config /data/calsync.yaml --data /data` を使ってください。macOS ネイティブ(launchd)運用ではこの境界自体が存在しないため、稼働中の `status` / `doctor` は安全です
 
 ## トラブルシューティング
 
