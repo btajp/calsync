@@ -107,7 +107,7 @@ flowchart TD
 
 - ループ防止は mappings 一次+タグ二次のまま。**タイトルをループ判定・対応付けに使わない**(Graph delta はタグを返せない前提も不変)。
 - カーソル規律・mappings ワイプ禁止・pending → active 遷移は無変更。
-- ブロッカーの visibility=private(Google)/ sensitivity=private(Graph)は維持する。detail_sync でタイトルを転記しても、**そのカレンダーを共有された第三者には従来通り非公開予定としか見えない**。詳細が見えるのは自分のカレンダー画面上だけ。
+- ブロッカーの visibility=private(Google)/ sensitivity=private(Graph)は維持する。閲覧権限だけの共有相手には従来通り非公開予定としか見えない。ただし private が隠せるのは閲覧レベルの共有に対してのみで、**編集権限を持つ共有相手・組織の管理者・そのカレンダーに API アクセスできる人は転記内容を読める**(show_origin_in_description の既存注意と同じ性質)。README のプライバシー記述もこれに合わせる。
 - suppressed mapping はハッシュ追従のみ(実体なし)。昇格時は共通ヘルパ経由で最新内容が作られる。
 
 ## 8. 既知の制限(仕様として明記)

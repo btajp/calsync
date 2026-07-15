@@ -240,18 +240,18 @@ accounts:
 
 ```yaml
 detail_sync:
-  - from: work        # 元アカウント(accounts の id)
+  - from: work-ms     # 元アカウント(accounts の id)
     to: personal      # ミラー先アカウント
     fields: [title, description]   # title / description から選択
-  - from: sub
-    to: personal
+  - from: personal
+    to: work-ms
     fields: [title]
 ```
 
 - 方向は一方通行です(逆方向も欲しければ 2 エントリ書きます)。指定していないペアは従来どおり完全匿名のままです
 - 元イベントのタイトル/説明の変更は次のポーリング(既定 1 分)で自動追従します
 - ペアの追加・削除・fields 変更を既存ブロッカーに反映するには、デーモン再起動後の日次リコンサイルを待つか、デーモン停止中に `calsync reconcile` を実行します
-- ブロッカーの visibility は private のままです。カレンダーを共有された第三者には従来どおり詳細は見えません(詳細が見えるのは自分のカレンダー上だけです)
+- ブロッカーの visibility は private のままです。閲覧権限だけの共有相手には従来どおり非公開の予定としか見えませんが、**編集権限を持つ共有相手・組織の管理者・そのカレンダーに API アクセスできる人は転記されたタイトル/説明を読めます**。組織のカレンダーへ転記するペアは慎重に設定してください
 
 ## Slack 通知(オプション)
 
