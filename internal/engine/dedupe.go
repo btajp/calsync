@@ -86,7 +86,8 @@ func (e *Engine) createFromMapping(ctx context.Context, m store.Mapping, ev mode
 	if err != nil {
 		return wrapTargetAuth(m.TargetAccount, err)
 	}
-	m.TimeHash = e.policyHashFor(model.TimeHash(ev), m.TargetAccount)
+	m.TimeHash = e.policyHashFor(model.TimeHash(ev), m.TargetAccount) +
+		e.detailComponentFor(m.OriginAccount, m.TargetAccount, ev)
 	m.Status = store.StatusPending
 	m.BlockerEventID = ""
 	if err := e.Store.PutMapping(m); err != nil {
