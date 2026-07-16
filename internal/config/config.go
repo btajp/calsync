@@ -305,6 +305,11 @@ func Load(path string) (*Config, error) {
 			if calSet[cal] {
 				return nil, fmt.Errorf("config: account %q: digest_calendars %q duplicates calendars", a.ID, cal)
 			}
+			if cal == a.BlockerCalendar {
+				// blocker_calendar は受領ブロッカーの置き場。重複を許すと「通知専用
+				// カレンダーにブロッカーは存在しない」前提(アンインストール手順等)が崩れる
+				return nil, fmt.Errorf("config: account %q: digest_calendars %q duplicates blocker_calendar", a.ID, cal)
+			}
 			if seenDigest[cal] {
 				return nil, fmt.Errorf("config: account %q: duplicate digest_calendars entry %q", a.ID, cal)
 			}

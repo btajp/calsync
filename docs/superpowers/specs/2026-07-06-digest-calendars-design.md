@@ -30,6 +30,7 @@ accounts:
 - `digest_calendars` は **google アカウントのみ許容**。microsoft はエラー(v1 の Graph 実装は `/me/calendarView` 固定でプライマリ以外を取得できないため — 既存の「microsoft は primary のみ」制約と同型のメッセージ)
 - 同一アカウント内で `calendars` と `digest_calendars` の**重複はエラー**(二重取得・二重表示の防止)
 - `digest_calendars` 内の重複もエラー。空文字列はエラー
+- `blocker_calendar` との重複もエラー(受領ブロッカーの置き場を通知専用と兼ねると「digest 専用カレンダーにブロッカーは存在しない」前提が崩れるため — 2026-07-16 追記)
 
 ## 4. テスト計画
 

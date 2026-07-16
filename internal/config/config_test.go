@@ -229,6 +229,20 @@ accounts:
 			wantErr: "duplicates calendars",
 		},
 		{
+			// blocker_calendar(既定 primary)は受領ブロッカーの置き場なので、
+			// 「通知専用カレンダーにブロッカーは存在しない」前提を守るため重複を拒否する
+			name: "digest_calendars duplicating blocker_calendar is rejected",
+			yaml: `
+accounts:
+  - id: personal
+    provider: google
+    email: user@gmail.com
+    calendars: [team@group.calendar.google.com]
+    digest_calendars: [primary]
+`,
+			wantErr: `digest_calendars "primary" duplicates blocker_calendar`,
+		},
+		{
 			name: "duplicate entries within digest_calendars are rejected",
 			yaml: `
 accounts:

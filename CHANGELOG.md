@@ -8,6 +8,7 @@
 
 ### Changed
 
+- `digest_calendars` と `blocker_calendar` の重複を設定エラーに(受領ブロッカーの置き場を通知専用カレンダーと兼ねる構成は「digest 専用にはブロッカーが無い」前提を崩すため拒否)
 - **docker-compose.yaml の Slack トークン受け渡しキーを `SLACK_BOT_TOKEN`(`bot_token_env` の既定値)に統一**。旧キー `SLACK_TOKEN_CALSYNC` を `.env` / `bot_token_env` で使っていた compose 利用者は、キー名を揃え直すか `bot_token_env` を明示すること(不一致だとトークンが空になり起動を拒否する)
 - README とセットアップスキル(calsync-setup)を最新化: macOS launchd ネイティブ常駐を推奨として冒頭・図・手順に反映、Slack ダイジェストの説明を v2.2 実装(色付き attachment グルーピング・上限 20 件・unfurl 抑止)に更新、コンテナ稼働中のホストからの SQLite アクセス禁止を明記、設定リファレンスに全キーへの参照を追加
 
