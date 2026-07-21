@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -91,6 +92,25 @@ func TestAuthRequired(t *testing.T) {
 	}
 }
 
+// TestRequireTokenRejectsNonLocalHost は最終ホールレビュー Fix 3(DNS rebinding
+// 対策)の回帰テスト。トークンが正しくても Host が 127.0.0.1/localhost 以外なら
+// 403 で拒否すること。
+func TestRequireTokenRejectsNonLocalHost(t *testing.T) {
+	s, _ := testServer(t)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	req, _ := http.NewRequest("GET", srv.URL+"/api/status", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Host = "evil.example"
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", res.StatusCode)
+	}
+}
+
 func get(t *testing.T, srv *httptest.Server, token, path string, into any) *http.Response {
 	t.Helper()
 	req, _ := http.NewRequest("GET", srv.URL+path, nil)
@@ -170,6 +190,55 @@ func TestStatusLaunchdRunning(t *testing.T) {
 	// DB 未作成は正常系(db_note で伝える)
 	if got.DBNote == "" {
 		t.Fatalf("want db_note for missing db, got %+v", got)
+	}
+}
+
+// TestStatusTokensEmptyArrayNotNull は最終ホールレビュー Fix 1 の回帰テスト。
+// アカウント 0 件の有効な config では tokens が JSON で "[]"(null ではない)に
+// なること。フロントの status.tokens.map(...) は null だとクラッシュする。
+func TestStatusTokensEmptyArrayNotNull(t *testing.T) {
+	s, dir := testServer(t)
+	cfgPath := filepath.Join(dir, "calsync.yaml")
+	os.WriteFile(cfgPath, []byte(`
+providers:
+  google: {credentials_file: /tmp/creds.json}
+`), 0o600)
+	s.ConfigPath = cfgPath
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	req, _ := http.NewRequest("GET", srv.URL+"/api/status", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(body), `"tokens":[]`) {
+		t.Fatalf(`expected literal "tokens":[] in response body, got %s`, body)
+	}
+}
+
+// TestStatusTokensEmptyArrayOnConfigLoadFailure は同じく Fix 1 の回帰テスト。
+// config.Load 自体が失敗する(壊れた YAML)場合でも tokens ループが回らないだけで
+// tokens は空配列のままであること(null にならないこと)を確認する。
+func TestStatusTokensEmptyArrayOnConfigLoadFailure(t *testing.T) {
+	s, dir := testServer(t)
+	cfgPath := filepath.Join(dir, "calsync.yaml")
+	os.WriteFile(cfgPath, []byte("not: [valid: yaml"), 0o600)
+	s.ConfigPath = cfgPath
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	req, _ := http.NewRequest("GET", srv.URL+"/api/status", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(body), `"tokens":[]`) {
+		t.Fatalf(`expected literal "tokens":[] in response body, got %s`, body)
 	}
 }
 

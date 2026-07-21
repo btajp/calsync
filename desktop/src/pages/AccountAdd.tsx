@@ -223,10 +223,13 @@ export default function AccountAdd({ api, onGoToDashboard }: { api: ApiClient; o
     api
       .listCalendars(id)
       .then((res) => {
-        setCalendarsState({ status: "ok", list: res.calendars });
-        const primaryValues = res.calendars.filter((c) => c.primary).map(calendarValue);
+        // サーバーは 0 件でも [] を返す(appserver 側で nil ガード済み)が、フロントは
+        // 念のため null/undefined を防御する(最終ホールレビュー Fix 1)。
+        const calendars = res.calendars ?? [];
+        setCalendarsState({ status: "ok", list: calendars });
+        const primaryValues = calendars.filter((c) => c.primary).map(calendarValue);
         setWatchedIds(primaryValues.length > 0 ? primaryValues : []);
-        setBlockerId(primaryValues[0] ?? res.calendars[0]?.id ?? "primary");
+        setBlockerId(primaryValues[0] ?? calendars[0]?.id ?? "primary");
       })
       .catch((e) => {
         const hint = e instanceof ApiError ? e.hint : undefined;

@@ -13,7 +13,6 @@ import (
 	"github.com/btajp/calsync/internal/config"
 	"github.com/btajp/calsync/internal/provider"
 	"github.com/btajp/calsync/internal/provider/google"
-	googleprov "github.com/btajp/calsync/internal/provider/google"
 	msprov "github.com/btajp/calsync/internal/provider/microsoft"
 )
 
@@ -75,7 +74,7 @@ func BuildProvider(cfg *config.Config, tokens *auth.TokenStore, acct config.Acco
 	ts := auth.PersistingTokenSource(acct.ID, tokens, ocfg.TokenSource(context.Background(), tok))
 	switch acct.Provider {
 	case "google":
-		return googleprov.New(ts, acct.ID), nil
+		return google.New(ts, acct.ID), nil
 	case "microsoft":
 		return msprov.New(ts, acct.ID, cfg.BusyShowAs), nil
 	default:

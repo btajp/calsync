@@ -37,7 +37,10 @@ type DaemonInfo struct {
 }
 
 // detectDaemon は運用形態を判定する。
-// plist あり → launchd 管理(launchctl print で稼働判定)。
+// plist あり → launchd 管理(launchctl print で稼働判定)。ただし print が失敗
+// (未ロード = installed but not loaded)する場合は、plist が古い残骸で実運用は
+// docker 版という構成もあり得るため、先に container 判定を試す(最終ホール
+// レビュー Fix 2: stale plist + コンテナ稼働でホストが DB 読み取りに到達するのを防ぐ)。
 // plist なし → docker で calsync コンテナ稼働中なら container(全 DB アクセス禁止)、
 // でなければ manual(手動運用 or 未セットアップ。DB には触らない)。
 func (s *Server) detectDaemon(ctx context.Context) DaemonInfo {
@@ -45,22 +48,37 @@ func (s *Server) detectDaemon(ctx context.Context) DaemonInfo {
 		target := fmt.Sprintf("gui/%d/%s", s.UID, launchdLabel)
 		out, _, err := s.Runner.Run(ctx, "launchctl", "print", target)
 		if err != nil {
+			if info, ok := s.detectContainer(ctx); ok {
+				return info
+			}
 			return DaemonInfo{Mode: "launchd", Running: false, Detail: "installed but not loaded"}
 		}
 		return DaemonInfo{Mode: "launchd", Running: strings.Contains(out, "state = running")}
 	}
-	if _, err := s.LookPath("docker"); err == nil {
-		out, _, err := s.Runner.Run(ctx, "docker", "ps", "--format", "{{.Names}}")
-		if err == nil {
-			for _, name := range strings.Fields(out) {
-				if name == "calsync" {
-					return DaemonInfo{Mode: "container", Running: true,
-						Detail: "container detected: host-side access to data/ is unsafe (VirtioFS)"}
-				}
-			}
-		}
+	if info, ok := s.detectContainer(ctx); ok {
+		return info
 	}
 	return DaemonInfo{Mode: "manual", Running: false}
+}
+
+// detectContainer は docker CLI 越しに calsync コンテナが稼働中かを判定する。
+// docker が PATH に無い・ps が失敗する・calsync という名前のコンテナが無い、の
+// いずれでも ok=false を返す(呼び出し側はフォールバック判定を続ける)。
+func (s *Server) detectContainer(ctx context.Context) (DaemonInfo, bool) {
+	if _, err := s.LookPath("docker"); err != nil {
+		return DaemonInfo{}, false
+	}
+	out, _, err := s.Runner.Run(ctx, "docker", "ps", "--format", "{{.Names}}")
+	if err != nil {
+		return DaemonInfo{}, false
+	}
+	for _, name := range strings.Fields(out) {
+		if name == "calsync" {
+			return DaemonInfo{Mode: "container", Running: true,
+				Detail: "container detected: host-side access to data/ is unsafe (VirtioFS)"}, true
+		}
+	}
+	return DaemonInfo{}, false
 }
 
 // requireNotContainer は書き込み/認可系エンドポイント(config PUT・auth

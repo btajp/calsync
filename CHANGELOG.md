@@ -9,6 +9,9 @@
 ### Fixed
 
 - **appserver: コンテナモードのガードを書き込み/認可系エンドポイントにも適用**: 仕様(§9)は「コンテナ運用のホストからは DB 読み取りを含む全機能を停止して案内表示モードに落とす」と定めていたが、実装は DB 読み取り(status)・doctor・デーモン操作のみをガードしており、`PUT /api/config`・`POST /api/auth/start`・`GET /api/accounts/{id}/calendars` はコンテナモードでも動作していた(ホストからのトークンファイル書き込みがコンテナ内デーモンの Microsoft refresh token ローテーションと競合しうる)。この 3 エンドポイントにコンテナモード検出時 409 `container_mode` を返すガードを追加。manual/launchd モードの挙動は変更なし。デスクトップアプリ側も、起動直後の状態確認でコンテナモードを検出したらタブ UI の代わりに案内画面を表示するよう変更
+- **appserver: `GET /api/status` の `tokens`(アカウント 0 件時)・`GET /api/accounts/{id}/calendars` の `calendars`(0 件時)が JSON `null` を返しデスクトップアプリがクラッシュする不具合を修正**: Go の nil スライスがそのまま JSON エンコードされていたため。両エンドポイントでレスポンスを空配列に初期化し、フロント側(`Dashboard.tsx` の `buildOverview`・`AccountAdd.tsx` のカレンダー取得)にも `?? []` の防御を追加
+- **appserver: launchd の plist はあるが `launchctl print` が未ロードを返す状態(stale plist)で、docker 版 calsync コンテナが稼働していても container モードを検出できていなかった不具合を修正**: デーモン検出順序を変更し、`launchctl print` 失敗時も docker のコンテナ検出を優先して試すようにした(ホストが誤ってコンテナ運用中の DB に読み取りアクセスしてしまうのを防止)
+- **appserver: HTTP リクエストの `Host` ヘッダを検証していなかった不具合を修正**: `requireToken` に Host 検証(`127.0.0.1:` / `localhost:` で始まらないリクエストは 403)を追加し、DNS rebinding 経由でのトークン窃取・API 呼び出しを防止
 
 ### Changed
 

@@ -51,5 +51,10 @@ func (s *Server) handleCalendars(w http.ResponseWriter, r *http.Request) {
 			"スコープ不足の場合は再認可すると取得できます。カレンダー ID の手入力でも設定できます")
 		return
 	}
+	// 0 件時に nil のままだと JSON null になりフロントの res.calendars 走査が
+	// クラッシュしうる(最終ホールレビュー Fix 1)。
+	if cals == nil {
+		cals = []google.CalendarListEntry{}
+	}
 	writeJSON(w, map[string]any{"calendars": cals})
 }

@@ -1,3 +1,5 @@
+// Package doctor は calsync のアカウント/トークン/DB 状態を診断する doctor
+// コマンド(CLI・appserver 双方から利用)の本体を提供する。
 package doctor
 
 import (

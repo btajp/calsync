@@ -85,10 +85,14 @@ func (s *Server) Handler() http.Handler {
 	return s.requireToken(mux)
 }
 
-// requireToken は Bearer トークン一致以外を一律 401 にする。
-// 比較は subtle.ConstantTimeCompare(タイミング攻撃対策)。
+// requireToken は Host 検証(DNS rebinding 対策)と Bearer トークン一致を両方
+// 要求する。比較は subtle.ConstantTimeCompare(タイミング攻撃対策)。
 func (s *Server) requireToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Host, "127.0.0.1:") && !strings.HasPrefix(r.Host, "localhost:") {
+			writeErr(w, http.StatusForbidden, "forbidden_host", "request Host is not 127.0.0.1/localhost", "")
+			return
+		}
 		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if subtle.ConstantTimeCompare([]byte(got), []byte(s.Token)) != 1 {
 			writeErr(w, http.StatusUnauthorized, "unauthorized", "invalid or missing token", "")

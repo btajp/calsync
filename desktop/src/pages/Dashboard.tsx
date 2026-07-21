@@ -42,7 +42,7 @@ export function buildOverview(raw: RawConfig, status: StatusResponse): OverviewR
       calendarsByAccount.set(c.account_id, [c]);
     }
   }
-  const tokenStateByAccount = new Map(status.tokens.map((t) => [t.account_id, t.state]));
+  const tokenStateByAccount = new Map((status.tokens ?? []).map((t) => [t.account_id, t.state]));
 
   return (raw.accounts ?? []).map((account) => {
     const accountId = account.id ?? "";

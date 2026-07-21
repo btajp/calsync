@@ -39,7 +39,9 @@ export interface TokenStatus { account_id: string; state: string }
 export interface CalendarStatus { account_id: string; calendar_id: string; last_sync: string; status: string }
 export interface StatusResponse {
   daemon: DaemonInfo;
-  tokens: TokenStatus[];
+  // サーバーは常に配列を返す(appserver 側で []TokenStatus{} 初期化済み)が、
+  // 型としては optional にして呼び出し側に ?? [] の防御を強制する。
+  tokens?: TokenStatus[];
   calendars?: CalendarStatus[];
   db_note?: string;
 }

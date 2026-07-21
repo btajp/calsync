@@ -35,7 +35,10 @@ type StatusResponse struct {
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	daemon := s.detectDaemon(r.Context())
-	resp := StatusResponse{Daemon: daemon}
+	// Tokens は明示的に空スライスで初期化する: nil のままだと JSON エンコードで
+	// null になり、フロントの status.tokens.map(...) がクラッシュする(最終ホール
+	// レビュー Fix 1)。アカウント 0 件・config.Load 失敗のいずれでも [] を保つ。
+	resp := StatusResponse{Daemon: daemon, Tokens: []TokenStatus{}}
 
 	// トークン状態はファイルベース(DB 非依存)なので常に返す
 	if cfg, err := config.Load(s.ConfigPath); err == nil {

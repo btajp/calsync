@@ -77,6 +77,12 @@ describe("buildOverview", () => {
     expect(rows.every((r) => r.tokenState === "unknown")).toBe(true);
   });
 
+  it("status.tokens が undefined でもクラッシュせず tokenState が 'unknown' になる(最終ホールレビュー Fix 1 回帰)", () => {
+    const undefinedTokens: StatusResponse = { ...status, tokens: undefined };
+    const rows = buildOverview(raw, undefinedTokens);
+    expect(rows.every((r) => r.tokenState === "unknown")).toBe(true);
+  });
+
   it("accounts が無い設定は空配列を返す", () => {
     expect(buildOverview({}, status)).toEqual([]);
   });

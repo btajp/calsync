@@ -2,8 +2,10 @@ package appserver
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"golang.org/x/oauth2"
@@ -40,6 +42,34 @@ func TestCalendarsEndpoint(t *testing.T) {
 	res2 := get(t, srv, "test-token", "/api/accounts/work-ms/calendars?provider=microsoft", nil)
 	if res2.StatusCode != http.StatusBadRequest {
 		t.Fatalf("ms status = %d", res2.StatusCode)
+	}
+}
+
+// TestCalendarsEndpointEmptyReturnsEmptyArray は最終ホールレビュー Fix 1 の回帰
+// テスト。ListCals が 0 件(nil スライス)を返しても、レスポンス JSON の
+// calendars は "[]"(null ではない)になること。フロントの res.calendars 走査は
+// null だとクラッシュする。
+func TestCalendarsEndpointEmptyReturnsEmptyArray(t *testing.T) {
+	s, dir := testServer(t)
+	tokens := &auth.TokenStore{Dir: dir}
+	if err := tokens.Save("new-acct", &oauth2.Token{AccessToken: "at", RefreshToken: "rt"}); err != nil {
+		t.Fatalf("save token: %v", err)
+	}
+	s.ListCals = func(ctx context.Context, cfg *config.Config, acct config.Account, dataDir string) ([]google.CalendarListEntry, error) {
+		return nil, nil
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	req, _ := http.NewRequest("GET", srv.URL+"/api/accounts/new-acct/calendars?provider=google", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(body), `"calendars":[]`) {
+		t.Fatalf(`expected literal "calendars":[] in response body, got %s`, body)
 	}
 }
 
