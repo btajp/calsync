@@ -55,7 +55,7 @@ func (s *Server) handleAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	s.authSt.phase, s.authSt.accountID, s.authSt.errMsg, s.authSt.cancel = "running", body.AccountID, "", cancel
+	s.authSt.phase, s.authSt.accountID, s.authSt.errMsg, s.authSt.hint, s.authSt.cancel = "running", body.AccountID, "", "", cancel
 	s.authSt.mu.Unlock()
 
 	go func() {
@@ -77,6 +77,9 @@ func (s *Server) handleAuthStart(w http.ResponseWriter, r *http.Request) {
 		}
 		s.authSt.phase = "done"
 	}()
+	// Content-Type は WriteHeader の前に設定する: writeJSON 内の Set はヘッダ送出後
+	// のため無効になり、応答が text/plain になってしまう(レビュー指摘)。
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	writeJSON(w, map[string]bool{"ok": true})
 }
