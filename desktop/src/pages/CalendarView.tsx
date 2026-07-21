@@ -68,9 +68,12 @@ export interface FullCalendarEventInput extends EventInput {
  * EventOut[] を FullCalendar のイベント入力形式へ変換する純関数
  * (デスクトップカレンダービュー設計 2026-07-21 §5)。
  * - 時刻ありイベント: start/end をそのまま使い allDay: false
- * - 終日イベント: all_day_start(YYYY-MM-DD)を start にし allDay: true。EventOut に
- *   all_day_end は無い(internal/appserver/events.go に定義が無いことを確認済み)ため
- *   end は指定しない(FullCalendar は単日として描画する)
+ * - 終日イベント: all_day_start(YYYY-MM-DD)を start にし allDay: true。
+ *   all_day_end(複数日イベントのみ非空。排他的終了日)があれば end に設定する —
+ *   FullCalendar の all-day イベントの end も同じ「排他的終了日」の規約なので
+ *   変換不要でそのまま使える。単日終日イベント(all_day_end が空文字)は end を
+ *   指定しない(レビュー Important 1: これが無いと開始日を含まないビューで
+ *   複数日終日イベントが完全に消えていた)
  * - title が空文字なら「(無題)」
  * - backgroundColor/borderColor は colorOf(代表アカウント = account_id)から設定
  */
@@ -84,7 +87,7 @@ export function toFullCalendarEvents(
       id: `${ev.account_id}-${i}`,
       title: ev.title || "(無題)",
       start: ev.all_day ? ev.all_day_start : ev.start,
-      ...(ev.all_day ? {} : { end: ev.end }),
+      ...(ev.all_day ? (ev.all_day_end ? { end: ev.all_day_end } : {}) : { end: ev.end }),
       allDay: ev.all_day,
       backgroundColor: color,
       borderColor: color,
@@ -105,11 +108,17 @@ function describeError(e: unknown): string {
 }
 
 /**
- * shell:allow-open にはコマンド単位の scope(URL allowlist)機能が無い
- * (tauri-plugin-shell 2.3.5 の gen/schemas/acl-manifests.json で確認済み: "Enables
- * the open command without any pre-configured scope")ため、呼び出し側で https の
- * みに絞る。html_link は Google/Microsoft のカレンダー API 由来で通常 https だが、
- * 想定外のスキーム(file: 等)を既定ブラウザ起動に渡さないための防御。
+ * capabilities の shell:allow-open にはコマンド単位の scope(URL allowlist)機能が
+ * 無い(tauri-plugin-shell 2.3.5 の gen/schemas/acl-manifests.json で確認済み:
+ * "Enables the open command without any pre-configured scope")。ただし
+ * tauri-plugin-shell の Rust 実装側(open_scope() in lib.rs)には、
+ * `tauri.conf.json` に `plugins.shell.open` を明示しない限り既定の検証 regex
+ * `^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+` が常に適用される(この設定は
+ * 本アプリでは未指定のため既定が有効)。つまり file:/javascript: 等は Rust 側の
+ * 既定 regex で既に弾かれるが、この既定は http: にも一致してしまうため、
+ * TypeScript 側でさらに https のみへ明示的に絞り込む(html_link は
+ * Google/Microsoft のカレンダー API 由来で通常 https。多層防御であり Rust 側の
+ * 検証を代替するものではない)。
  */
 export function isHttpsUrl(value: string): boolean {
   try {
@@ -119,10 +128,21 @@ export function isHttpsUrl(value: string): boolean {
   }
 }
 
-/** イベントの見出し表示。meeting_url があればネイティブ title 属性でツールチップ表示する(装飾は最小)。 */
+/**
+ * イベントの見出し表示。既定の eventContent を上書きしているため、FullCalendar が
+ * 本来自動で付ける時刻表示(月ビューの各イベント行の先頭時刻等)が消えてしまう —
+ * arg.timeText(終日イベントやタイムグリッド上のイベントでは空文字)を先頭に
+ * 明示的に表示して補う。meeting_url があればネイティブ title 属性でツールチップ
+ * 表示する(装飾は最小)。
+ */
 function renderEventContent(arg: EventContentArg) {
   const meetingUrl = arg.event.extendedProps.meetingUrl as string;
-  return <div title={meetingUrl || undefined}>{arg.event.title}</div>;
+  return (
+    <div title={meetingUrl || undefined}>
+      {arg.timeText && <span className="fc-calsync-event-time">{arg.timeText} </span>}
+      {arg.event.title}
+    </div>
+  );
 }
 
 export default function CalendarView({ api }: { api: ApiClient }) {
@@ -132,7 +152,14 @@ export default function CalendarView({ api }: { api: ApiClient }) {
   const [failed, setFailed] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
   const lastRangeRef = useRef<{ from: string; to: string } | null>(null);
+  // リクエスト連番。datesSet の連打(週↔月の素早い切り替え・ドラッグでの範囲変更)で
+  // 複数の api.events() が同時に飛んだ場合、後発リクエストより先に古いリクエストの
+  // レスポンスが届くと画面が古い期間のイベントに巻き戻る(レビュー Important 2)。
+  // 呼び出しごとに採番し、レスポンス到着時に「自分が最新のリクエストか」を確認して
+  // からのみ setEvents/setFailed/setFetchError/setLoading を反映し、古ければ破棄する。
+  const requestSeqRef = useRef(0);
 
   // アカウント色は起動時(タブ表示時)に 1 回だけ getConfig() を取得して決める
   // (定義順を色割当の基準にするため。デスクトップカレンダービュー設計 2026-07-21 §5)。
@@ -150,16 +177,25 @@ export default function CalendarView({ api }: { api: ApiClient }) {
   const loadEvents = useCallback(
     (from: string, to: string, refresh: boolean) => {
       lastRangeRef.current = { from, to };
+      const seq = ++requestSeqRef.current;
+      const isStale = () => requestSeqRef.current !== seq;
       setLoading(true);
       setFetchError(null);
       api
         .events(from, to, refresh)
         .then((res) => {
+          if (isStale()) return; // 自分より新しいリクエストが既に発行済み → 結果を破棄
           setEvents(res.events);
           setFailed(res.failed);
         })
-        .catch((e) => setFetchError(describeError(e)))
-        .finally(() => setLoading(false));
+        .catch((e) => {
+          if (isStale()) return;
+          setFetchError(describeError(e));
+        })
+        .finally(() => {
+          if (isStale()) return;
+          setLoading(false);
+        });
     },
     [api],
   );
@@ -180,7 +216,8 @@ export default function CalendarView({ api }: { api: ApiClient }) {
   const handleEventClick = (arg: EventClickArg) => {
     const link = arg.event.extendedProps.htmlLink as string;
     if (link && isHttpsUrl(link)) {
-      void open(link);
+      setOpenError(null);
+      open(link).catch((e) => setOpenError(describeError(e)));
     }
   };
 
@@ -190,6 +227,7 @@ export default function CalendarView({ api }: { api: ApiClient }) {
     <div className="calendar-view">
       {configError && <p className="error">設定の取得に失敗しました: {configError}</p>}
       {fetchError && <p className="error">予定の取得に失敗しました: {fetchError}</p>}
+      {openError && <p className="error">ブラウザを開けませんでした: {openError}</p>}
       {failed.length > 0 && (
         <div className="banner banner-warning">
           <p>一時的に取得できないアカウント: {failed.join(", ")}。数分後に再試行してください。</p>

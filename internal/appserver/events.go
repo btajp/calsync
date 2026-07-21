@@ -32,6 +32,7 @@ type EventOut struct {
 	End         string   `json:"end"`   // RFC3339
 	AllDay      bool     `json:"all_day"`
 	AllDayStart string   `json:"all_day_start"` // YYYY-MM-DD(AllDay時のみ)
+	AllDayEnd   string   `json:"all_day_end"`   // 排他的終了日・YYYY-MM-DD(AllDay時、複数日イベントのみ非空)
 	MeetingURL  string   `json:"meeting_url"`
 	HTMLLink    string   `json:"html_link"`
 }
@@ -152,6 +153,7 @@ func toEventOut(entries []engine.DigestEntry) []EventOut {
 			End:         en.EndUTC.UTC().Format(time.RFC3339),
 			AllDay:      en.IsAllDay,
 			AllDayStart: en.AllDayStart,
+			AllDayEnd:   en.AllDayEnd,
 			MeetingURL:  en.MeetingURL,
 			HTMLLink:    en.HTMLLink,
 		})

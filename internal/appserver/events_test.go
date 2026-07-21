@@ -134,6 +134,35 @@ func TestEventsMapsFakeCollectEvents(t *testing.T) {
 	}
 }
 
+// TestEventsMapsAllDayEnd は DigestEntry.AllDayEnd(複数日終日イベントの排他的
+// 終了日)が EventOut.AllDayEnd(json: all_day_end)へ欠落なく写像されることを
+// 検証する(レビュー Important 1: NormalizedEvent → DigestEntry → EventOut の
+// 3 層すべてで運ばれて初めてフロントが複数日終日イベントを正しく描画できる)。
+func TestEventsMapsAllDayEnd(t *testing.T) {
+	s, _ := launchdServer(t)
+	s.CollectEvents = func(ctx context.Context, w model.Window) ([]engine.DigestEntry, []string, error) {
+		return []engine.DigestEntry{
+			{
+				Title: "3日間の休暇", IsAllDay: true, AllDayStart: "2026-07-05", AllDayEnd: "2026-07-08",
+				AccountIDs: []string{"personal"},
+			},
+		}, nil, nil
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	var got EventsResponse
+	res := get(t, srv, "test-token", "/api/events?from=2026-07-06T00:00:00Z&to=2026-07-07T00:00:00Z", &got)
+	if res.StatusCode != 200 {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	if len(got.Events) != 1 {
+		t.Fatalf("events = %+v", got.Events)
+	}
+	if got.Events[0].AllDayStart != "2026-07-05" || got.Events[0].AllDayEnd != "2026-07-08" {
+		t.Fatalf("all-day fields = %+v", got.Events[0])
+	}
+}
+
 // TestEventsCacheSkipsSecondCallAndRefreshBypasses は 60 秒メモリキャッシュが
 // 同一 (from,to) の 2 回目呼び出しでフェイクを再実行しないこと、refresh=1 が
 // キャッシュをバイパスして再実行することを検証する(スペック §4)。

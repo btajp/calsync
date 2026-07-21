@@ -58,6 +58,7 @@ export interface EventOut {
   end: string; // RFC3339
   all_day: boolean;
   all_day_start: string; // YYYY-MM-DD(all_day 時のみ)
+  all_day_end: string; // 排他的終了日・YYYY-MM-DD(all_day 時、複数日イベントのみ非空)
   meeting_url: string;
   html_link: string;
 }

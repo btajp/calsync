@@ -21,6 +21,7 @@ type DigestEntry struct {
 	EndUTC      time.Time
 	IsAllDay    bool
 	AllDayStart string
+	AllDayEnd   string // 排他的終了日(model.NormalizedEvent.AllDayEnd の写し。複数日終日イベントの表示用。Slack ダイジェスト表示(notify/slack)は参照しない)
 	MeetingURL  string
 	Description string // ダイジェストの blocks では使わない(リマインド用。v2 スペック 4 章)
 	HTMLLink    string
@@ -178,7 +179,8 @@ func (e *Engine) windowIncludes(ref model.CalendarRef, ev model.NormalizedEvent,
 
 // appendDigestEntry は dedupe_same_meeting=true のとき同一 iCalUID+開始時刻の
 // エントリを 1 行に統合する(由来アカウント併記。件名は設定順で最初の非空を採用
-// する決定的規則。スペック 5 章)。
+// する決定的規則。スペック 5 章)。AllDayStart/AllDayEnd は統合後も書き換えない
+// (先勝ち。生成時の値のまま)
 func (e *Engine) appendDigestEntry(entries *[]DigestEntry, byKey map[string]int, accountID string, ev model.NormalizedEvent) {
 	entry := DigestEntry{
 		Title:       ev.Title,
@@ -186,6 +188,7 @@ func (e *Engine) appendDigestEntry(entries *[]DigestEntry, byKey map[string]int,
 		EndUTC:      ev.EndUTC,
 		IsAllDay:    ev.IsAllDay,
 		AllDayStart: ev.AllDayStart,
+		AllDayEnd:   ev.AllDayEnd,
 		MeetingURL:  ev.MeetingURL,
 		Description: ev.Description,
 		HTMLLink:    ev.HTMLLink,

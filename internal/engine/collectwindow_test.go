@@ -110,3 +110,26 @@ func TestCollectWindowAllDayBoundaryDependsOnWindowOffset(t *testing.T) {
 	require.Empty(t, failed)
 	require.Empty(t, utcEntries, "UTC-converted window must NOT include it (date label shifts a day earlier)")
 }
+
+// TestCollectWindowThreadsAllDayEndToDigestEntry は複数日終日イベントの排他的
+// 終了日(model.NormalizedEvent.AllDayEnd)が DigestEntry.AllDayEnd まで欠落なく
+// 届くことを検証する(レビュー Important 1 の再発防止: これが欠けていると
+// フロントの toFullCalendarEvents が終了日を知る手段を失い、開始日を含まない
+// ビュー(例: 3 日間休暇の 2 日目だけを表示する週)でイベントが完全に消えていた)。
+func TestCollectWindowThreadsAllDayEndToDigestEntry(t *testing.T) {
+	e, f := newTestEngine(t)
+	winStart := time.Date(2026, 7, 5, 0, 0, 0, 0, jstLoc)
+	winEnd := time.Date(2026, 7, 8, 0, 0, 0, 0, jstLoc)
+
+	f.SetFullState(refA, []model.NormalizedEvent{
+		{ID: "multi-day", ICalUID: "multi-day@x", Title: "3日間の休暇", IsAllDay: true, AllDayStart: "2026-07-04", AllDayEnd: "2026-07-07", IsBusy: true},
+	})
+	f.SetFullState(model.CalendarRef{AccountID: "b", CalendarID: "primary"}, nil)
+	f.SetFullState(model.CalendarRef{AccountID: "c", CalendarID: "primary"}, nil)
+
+	entries, failed := e.CollectWindow(context.Background(), model.Window{Start: winStart, End: winEnd})
+	require.Empty(t, failed)
+	require.Len(t, entries, 1)
+	require.Equal(t, "2026-07-04", entries[0].AllDayStart)
+	require.Equal(t, "2026-07-07", entries[0].AllDayEnd)
+}
