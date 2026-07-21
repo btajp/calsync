@@ -20,7 +20,7 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 	if info := s.detectDaemon(r.Context()); info.Mode != "launchd" {
 		writeErr(w, http.StatusConflict, "not_launchd",
 			"doctor is only available on a launchd-managed setup",
-			"launchd 管理外です。./scripts/macos/install-launchd.sh でのセットアップ、または CLI の calsync doctor を稼働中のデーモンを止めてから実行してください")
+			"launchd 管理外です。./scripts/macos/install-launchd.sh でのセットアップ、または稼働中のデーモンを止めてから CLI の calsync doctor を実行してください")
 		return
 	}
 	cfg, err := config.Load(s.ConfigPath)
