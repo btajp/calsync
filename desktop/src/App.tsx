@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ApiClient } from "./api";
 import { startSidecar } from "./sidecar";
 import Dashboard from "./pages/Dashboard";
+import ConfigForm from "./pages/ConfigForm";
 
 export default function App() {
   const [api, setApi] = useState<ApiClient | null>(null);
@@ -79,7 +80,7 @@ function Shell({ api, onResetDataDir }: { api: ApiClient; onResetDataDir: () => 
       </header>
 
       {tab === "dashboard" && <Dashboard api={api} />}
-      {tab === "config" && <p>設定画面は Task 13 で実装します。</p>}
+      {tab === "config" && <ConfigForm api={api} onGoToAccountAdd={() => setTab("account-add")} />}
       {tab === "account-add" && <p>アカウント追加画面は Task 14 で実装します。</p>}
     </main>
   );
