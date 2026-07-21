@@ -33,6 +33,9 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request) {
+	if s.requireNotContainer(w, r) {
+		return
+	}
 	var body struct {
 		Raw       config.Raw `json:"raw"`
 		BaseMtime string     `json:"base_mtime"`

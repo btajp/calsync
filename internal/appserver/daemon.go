@@ -63,6 +63,22 @@ func (s *Server) detectDaemon(ctx context.Context) DaemonInfo {
 	return DaemonInfo{Mode: "manual", Running: false}
 }
 
+// requireNotContainer は書き込み/認可系エンドポイント(config PUT・auth
+// start・calendars)の入口ガード。コンテナ運用のホストからの変更はコンテナ内
+// デーモンとの競合(トークンローテーション等)を招くため、仕様§9に従い一律
+// 409 で拒否する。拒否した場合 true を返す(呼び出し側は直ちに return する)。
+// manual/launchd/unknown は対象外(初回セットアップの config 編集・アカウント
+// 追加を止めないため)。
+func (s *Server) requireNotContainer(w http.ResponseWriter, r *http.Request) bool {
+	if s.detectDaemon(r.Context()).Mode == "container" {
+		writeErr(w, http.StatusConflict, "container_mode",
+			"calsync appears to be running in a container on this host",
+			"コンテナ稼働中はホスト側からの変更・認可はできません。docker compose の手順(README)を使ってください")
+		return true
+	}
+	return false
+}
+
 // handleDaemonAction は POST /api/daemon/{start|stop|restart} を処理する。
 // launchd モード外は 409 を返す。成功時は {"ok":true} を返す。
 func (s *Server) handleDaemonAction(w http.ResponseWriter, r *http.Request) {

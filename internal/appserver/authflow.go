@@ -27,6 +27,9 @@ type authState struct {
 // handleAuthStart は POST /api/auth/start。ループバック OAuth フローを
 // バックグラウンドで開始し、直ちに 202 を返す。進行中に再度呼ぶと 409。
 func (s *Server) handleAuthStart(w http.ResponseWriter, r *http.Request) {
+	if s.requireNotContainer(w, r) {
+		return
+	}
 	var body struct {
 		AccountID string `json:"account_id"`
 		Provider  string `json:"provider"`

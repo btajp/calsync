@@ -56,7 +56,7 @@ rm -f ~/.local/bin/calsync        # launchd 運用のバイナリ
 rm -rf desktop/src-tauri/target   # デスクトップアプリ(desktop/)を使っていた場合のビルド成果物(サイドカーの calsync バイナリ含む)
 ```
 
-デスクトップアプリ(`desktop/`)から `npm run tauri build` で `.app` を生成し `/Applications` 等へコピーしていた場合はそれも削除する。**アプリ自体にアンインストール操作はない**(アカウント削除・ブロッカー掃除は本スキルの Step 1〜3 の CLI 手順に従うこと)。
+デスクトップアプリ(`desktop/`)から `npm run tauri build` で `.app` を生成し `/Applications` 等へコピーしていた場合はそれも削除する。**アプリ自体にアンインストール操作はない**(アカウント削除・ブロッカー掃除は本スキルの Step 0 の分岐に従うこと)。
 
 リポジトリの clone 自体も不要なら削除してよい。
 

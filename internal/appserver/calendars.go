@@ -25,6 +25,9 @@ func defaultListCals(ctx context.Context, cfg *config.Config, acct config.Accoun
 // 処理する。id は設定に未登録でも良い(追加ウィザードではまだ config に
 // アカウントが無い状態でトークンだけ保存済み、というケースがある)。
 func (s *Server) handleCalendars(w http.ResponseWriter, r *http.Request) {
+	if s.requireNotContainer(w, r) {
+		return
+	}
 	if r.URL.Query().Get("provider") != "google" {
 		writeErr(w, http.StatusBadRequest, "unsupported_provider",
 			"calendar listing is only available for google accounts",
