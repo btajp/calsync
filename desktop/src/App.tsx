@@ -6,6 +6,7 @@ import { startSidecar } from "./sidecar";
 import Dashboard from "./pages/Dashboard";
 import ConfigForm from "./pages/ConfigForm";
 import AccountAdd from "./pages/AccountAdd";
+import CalendarView from "./pages/CalendarView";
 import UpdateBanner from "./components/UpdateBanner";
 
 export default function App() {
@@ -67,10 +68,11 @@ export default function App() {
   return <Shell api={api} onResetDataDir={() => { localStorage.removeItem("calsync.dataDir"); setDataDir(null); }} />;
 }
 
-type Tab = "dashboard" | "config" | "account-add";
+type Tab = "dashboard" | "calendar" | "config" | "account-add";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "dashboard", label: "ダッシュボード" },
+  { key: "calendar", label: "カレンダー" },
   { key: "config", label: "設定" },
   { key: "account-add", label: "アカウント追加" },
 ];
@@ -169,6 +171,7 @@ function Shell({ api, onResetDataDir }: { api: ApiClient; onResetDataDir: () => 
       <UpdateBanner />
 
       {tab === "dashboard" && <Dashboard api={api} />}
+      {tab === "calendar" && <CalendarView api={api} />}
       {tab === "config" && <ConfigForm api={api} onGoToAccountAdd={() => setTab("account-add")} />}
       {tab === "account-add" && <AccountAdd api={api} onGoToDashboard={() => setTab("dashboard")} />}
     </main>
