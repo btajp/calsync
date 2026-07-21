@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ApiClient } from "./api";
 import { startSidecar } from "./sidecar";
+import Dashboard from "./pages/Dashboard";
 
 export default function App() {
   const [api, setApi] = useState<ApiClient | null>(null);
@@ -46,10 +47,40 @@ export default function App() {
   return <Shell api={api} onResetDataDir={() => { localStorage.removeItem("calsync.dataDir"); setDataDir(null); }} />;
 }
 
-function Shell({ api }: { api: ApiClient; onResetDataDir: () => void }) {
-  const [ping, setPing] = useState<string>("...");
-  useEffect(() => {
-    api.status().then((s) => setPing(`daemon: ${s.daemon.mode}`)).catch((e) => setPing(String(e)));
-  }, [api]);
-  return <main><h1>calsync</h1><p>{ping}</p></main>;
+type Tab = "dashboard" | "config" | "account-add";
+
+const TABS: { key: Tab; label: string }[] = [
+  { key: "dashboard", label: "ダッシュボード" },
+  { key: "config", label: "設定" },
+  { key: "account-add", label: "アカウント追加" },
+];
+
+function Shell({ api, onResetDataDir }: { api: ApiClient; onResetDataDir: () => void }) {
+  const [tab, setTab] = useState<Tab>("dashboard");
+
+  return (
+    <main>
+      <header className="app-header">
+        <h1>calsync</h1>
+        <nav className="tabs">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              className={t.key === tab ? "tab active" : "tab"}
+              onClick={() => setTab(t.key)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
+        <button className="link-button" onClick={onResetDataDir}>
+          データフォルダ変更
+        </button>
+      </header>
+
+      {tab === "dashboard" && <Dashboard api={api} />}
+      {tab === "config" && <p>設定画面は Task 13 で実装します。</p>}
+      {tab === "account-add" && <p>アカウント追加画面は Task 14 で実装します。</p>}
+    </main>
+  );
 }
