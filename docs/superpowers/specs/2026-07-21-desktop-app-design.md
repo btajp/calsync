@@ -123,7 +123,7 @@ internal/appserver/             # HTTP ハンドラ群(新規パッケージ)
 | `POST /api/auth/cancel` | 進行中の認可を中断 | 同上 |
 | `POST /api/daemon/start` `stop` `restart` | launchctl 実行。launchd 管理外は 409 + 手動手順を返す | 新規(runner 抽象越し) |
 
-- エラーは全エンドポイント共通で `{code, message, hint}`。プロバイダ認証エラーは既存 `autherr` 正規化を通して hint(再認可の要否)を付ける
+- エラーは全エンドポイント共通で `{code, message, hint}`。appserver 自体は同期エンジンの `autherr` 正規化を呼ばず、エンドポイントごとに固定の hint 文言(例: 認可失敗時「ブラウザでの認可が完了しませんでした。再試行してください」、カレンダー取得失敗時「スコープ不足の場合は再認可すると取得できます」)を付けて返す
 - デーモン状態はフロントがフォアグラウンド時に 5 秒間隔でポーリングする
 
 ## 7. 設定の書き戻しとコメント保持
@@ -154,6 +154,8 @@ flowchart TD
 - launchd 管理(既存の LaunchAgent ラベル)を `launchctl print` で検出し、停止/起動/再起動ボタンを提供する。実行は runner インターフェース越しに行い、テストでは fake に差し替える
 - launchd 管理外(手動 `calsync run` 等)を検出したら操作ボタンを出さず、手動手順の案内を表示する
 - コンテナガード: launchd ジョブが見つからず、かつ docker CLI で稼働中の calsync コンテナを検出した場合、DB 読み取りを含む全機能を停止して案内表示モードに落とす。docker CLI が無い場合はこの判定をスキップする(launchd 管理外の案内モードになるだけで、DB には launchd 検出成功時しか触れない構造にする)
+- 判定順序: plist が存在するが `launchctl print` が失敗する(インストール済みだが未ロード)場合も、上記と同じ docker 検出を先に試す。plist は古い残骸で実運用は docker 版という構成があり得るため、コンテナ検出が優先される。検出できなければ従来どおり「installed but not loaded」の launchd モードを返す(ホストが誤って DB 読み取りに到達しないようにするための優先順位)
+- 読み取り例外: コンテナモードでも `GET /api/status`・`GET /api/config`(プレーンファイル読みのみ・SQLite には触れない)は案内画面表示とモード検出のために許可する。DB 読み取り・書き込み・OAuth 認可・カレンダー取得等はすべて 409 で拒否する
 
 ## 10. エラー処理
 
@@ -168,7 +170,7 @@ flowchart TD
 ## 11. セキュリティ
 
 - API は 127.0.0.1 bind・エフェメラルポート・起動ごとに生成するワンタイム Bearer トークン。トークンは stdout 経由で殻だけが受け取る(ファイルに書かない)
-- CORS 不許可(ブラウザから叩かれても Origin 検証とトークンの二重で拒否)
+- CORS 不許可(ブラウザから叩かれても拒否)。全リクエストは `requireToken` ミドルウェアで Host 検証とワンタイム Bearer トークンの両方を通す: `Host` ヘッダが `127.0.0.1:` または `localhost:` で始まらないリクエストは 403 で拒否(DNS rebinding 対策)し、続けてトークン不一致を 401 で拒否する
 - トークン・credentials の値はログ・エラーメッセージ・API レスポンスに含めない
 - Tauri の capability は shell(サイドカー spawn)等の必要最小限のみ許可する
 
