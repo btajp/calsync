@@ -13,6 +13,12 @@
     "windows": [{ "title": "calsync", "width": 980, "height": 700 }],
     "security": { "csp": null }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVCMjk1ODU2ODZGRDc3MTMKUldRVGQvMkdWbGdwNjZNR3ZjZ1U4MmxHSGhrSnNhVFlhUzl1R2FGaGtuOW9TdmtUZlA1QTdtQmkK",
+      "endpoints": ["https://github.com/btajp/calsync/releases/latest/download/latest.json"]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["app"],

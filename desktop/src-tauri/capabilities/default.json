@@ -10,6 +10,8 @@
       "allow": [{ "name": "binaries/calsync", "sidecar": true, "args": true }]
     },
     "shell:allow-kill",
-    "shell:allow-stdin-write"
+    "shell:allow-stdin-write",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

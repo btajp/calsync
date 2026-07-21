@@ -10,16 +10,20 @@
 # 構築済みのものを使う。新規作成はしない。
 #
 # やること(順に・失敗したら即中断):
-#   1. release.env 読込 + 必須変数・.p8 の存在確認(Apple ID 方式の env は unset)
+#   1. release.env 読込 + 必須変数・.p8・updater 署名鍵(TAURI_SIGNING_PRIVATE_KEY)の存在確認
+#      (Apple ID 方式の env は unset)
 #   2. preflight: gh・cargo・npm・xcrun notarytool の存在確認
 #   3. Git 前提(push 済み・クリーンな main のみ)・タグ desktop-v<version> の未使用チェック
 #   4. バージョン整合(package.json・tauri.conf.json・Cargo.toml・CHANGELOG)
 #   5. cd desktop && npm ci && npm run build-sidecar
-#   6. tauri build(署名・公証・staple(.app)は bundler が env から自動実行)
-#   7. 生成物検証(.app / dmg の存在・署名・公証・サイドカー個別署名)
+#   6. tauri build(署名・公証・staple(.app)は bundler が env から自動実行。updater
+#      アーティファクト(.app.tar.gz/.sig)は tauri.release.conf.json の
+#      createUpdaterArtifacts で有効化・TAURI_SIGNING_PRIVATE_KEY で minisign 署名)
+#   7. 生成物検証(.app / dmg / .app.tar.gz / .sig の存在・署名・公証・サイドカー個別署名)
 #   8. dmg 自体の公証 + staple(Tauri が staple するのは .app のみ)
 #   9. checksums.txt 生成(shasum -a 256)
-#  10. GitHub Release(draft で全アセットを揃えてから publish = 原子的公開)
+#  10. latest.json 生成(signature には .sig ファイルの中身を埋め込む)
+#  11. GitHub Release(draft で全アセットを揃えてから publish = 原子的公開)
 set -euo pipefail
 
 usage() {
@@ -43,6 +47,8 @@ ENV_FILE="${CALSYNC_RELEASE_ENV:-$HOME/.config/calsync/release.env}"
 BUNDLE_DIR="$REPO_DIR/desktop/src-tauri/target/release/bundle"
 APP="$BUNDLE_DIR/macos/calsync.app"
 DMG="$BUNDLE_DIR/dmg/calsync_${VERSION}_aarch64.dmg"
+TARGZ="$BUNDLE_DIR/macos/calsync.app.tar.gz"
+SIG="$TARGZ.sig"
 TAG="desktop-v$VERSION"
 
 # 1. release.env(無ければテンプレートを生成して人間に返す)
@@ -56,6 +62,9 @@ APPLE_SIGNING_IDENTITY="Developer ID Application: YOUR ORG (TEAMID)"
 APPLE_API_KEY="ABC123DEFG"                                    # Key ID(10桁)
 APPLE_API_ISSUER="00000000-0000-0000-0000-000000000000"       # Issuer ID(UUID)
 APPLE_API_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_ABC123DEFG.p8"
+# --- updater 署名(Tauri minisign 鍵。Apple 署名とは別物) ---
+TAURI_SIGNING_PRIVATE_KEY="$HOME/.tauri/calsync-updater.key"
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""                          # 鍵にパスワードが無ければ空のまま
 TMPL
   chmod 600 "$ENV_FILE"
   echo "release.env のテンプレートを生成しました: $ENV_FILE"
@@ -64,11 +73,13 @@ TMPL
 fi
 # shellcheck disable=SC1090
 source "$ENV_FILE"
-for v in APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH; do
+for v in APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH TAURI_SIGNING_PRIVATE_KEY; do
   [[ -n "${!v:-}" ]] || { echo "ERROR: $ENV_FILE の $v が未設定です" >&2; exit 1; }
 done
 [[ -f "$APPLE_API_KEY_PATH" ]] || { echo "ERROR: APPLE_API_KEY_PATH が存在しません: $APPLE_API_KEY_PATH" >&2; exit 1; }
-export APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH
+[[ -f "$TAURI_SIGNING_PRIVATE_KEY" ]] || { echo "ERROR: TAURI_SIGNING_PRIVATE_KEY が存在しません: $TAURI_SIGNING_PRIVATE_KEY" >&2; exit 1; }
+export APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH TAURI_SIGNING_PRIVATE_KEY
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 # Apple ID 方式(APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID)が API キー方式より先に評価される
 # (tauri-cli 実装)ため、環境に混入していたら外して API キー方式に固定する。
 unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD 2>/dev/null || true
@@ -135,6 +146,12 @@ echo "-- tauri build(署名・公証込み・数分かかります)"
 for p in "$APP" "$DMG"; do
   [[ -e "$p" ]] || { echo "ERROR: 生成物がありません: $p" >&2; exit 1; }
 done
+for p in "$TARGZ" "$SIG"; do
+  [[ -e "$p" ]] || {
+    echo "ERROR: updater 生成物がありません: $p(TAURI_SIGNING_PRIVATE_KEY の設定を確認してください)" >&2
+    exit 1
+  }
+done
 echo "-- 署名・公証の検証"
 codesign --verify --deep --strict --verbose=2 "$APP"
 xcrun stapler validate "$APP"
@@ -167,7 +184,26 @@ xcrun stapler validate "$DMG"
 CHECKSUMS="$BUNDLE_DIR/dmg/checksums.txt"
 (cd "$(dirname "$DMG")" && shasum -a 256 "$(basename "$DMG")" > "$CHECKSUMS")
 
-# 10. GitHub Release(draft で全アセットを揃えてから publish = 原子的公開)
+# 10. latest.json 生成(signature は .sig ファイルの中身)
+LATEST_JSON="$BUNDLE_DIR/latest.json"
+SIG_CONTENT="$(cat "$SIG")" \
+ASSET_URL="https://github.com/btajp/calsync/releases/download/${TAG}/calsync.app.tar.gz" \
+REL_VERSION="$VERSION" PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+python3 - "$LATEST_JSON" <<'PY'
+import json, os, sys
+json.dump({
+    "version": os.environ["REL_VERSION"],
+    "pub_date": os.environ["PUB_DATE"],
+    "platforms": {
+        "darwin-aarch64": {
+            "signature": os.environ["SIG_CONTENT"],
+            "url": os.environ["ASSET_URL"],
+        }
+    },
+}, open(sys.argv[1], "w"), indent=2)
+PY
+
+# 11. GitHub Release(draft で全アセットを揃えてから publish = 原子的公開)
 echo "-- GitHub Release 作成"
 NOTES_FILE="$(mktemp)"
 python3 - "$REPO_DIR/CHANGELOG.md" "$VERSION" > "$NOTES_FILE" <<'PY'
@@ -177,7 +213,7 @@ m = re.search(rf"^## \[{re.escape(sys.argv[2])}\][^\n]*\n(.*?)(?=^## \[|\Z)", te
 print(m.group(1).strip() if m else "")
 PY
 gh release create "$TAG" --draft --target "$HEAD_SHA" --title "$TAG" --notes-file "$NOTES_FILE" \
-  "$DMG" "$CHECKSUMS"
+  "$DMG" "$CHECKSUMS" "$TARGZ" "$LATEST_JSON"
 gh release edit "$TAG" --draft=false
 rm -f "$NOTES_FILE"
 git -C "$REPO_DIR" fetch --tags
