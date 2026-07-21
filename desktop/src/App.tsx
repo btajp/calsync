@@ -6,6 +6,7 @@ import { startSidecar } from "./sidecar";
 import Dashboard from "./pages/Dashboard";
 import ConfigForm from "./pages/ConfigForm";
 import AccountAdd from "./pages/AccountAdd";
+import UpdateBanner from "./components/UpdateBanner";
 
 export default function App() {
   const [api, setApi] = useState<ApiClient | null>(null);
@@ -138,6 +139,8 @@ function Shell({ api, onResetDataDir }: { api: ApiClient; onResetDataDir: () => 
           データフォルダ変更
         </button>
       </header>
+
+      <UpdateBanner />
 
       {tab === "dashboard" && <Dashboard api={api} />}
       {tab === "config" && <ConfigForm api={api} onGoToAccountAdd={() => setTab("account-add")} />}
