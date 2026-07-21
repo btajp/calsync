@@ -70,7 +70,7 @@ func (s *Server) handleDaemonAction(w http.ResponseWriter, r *http.Request) {
 	if info.Mode != "launchd" {
 		writeErr(w, http.StatusConflict, "not_launchd",
 			"daemon is not managed by launchd on this host",
-			"launchd管理外です。./scripts/macos/install-launchd.sh でのセットアップ、または手動での操作を行ってください")
+			"launchd 管理外です。./scripts/macos/install-launchd.sh でのセットアップ、または手動での操作を行ってください")
 		return
 	}
 	target := fmt.Sprintf("gui/%d/%s", s.UID, launchdLabel)
