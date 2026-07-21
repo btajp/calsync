@@ -105,6 +105,7 @@ GitHub から dmg を新しくダウンロードして確認する。
 codesign --verify --deep --strict --verbose=2 /Applications/calsync.app
 spctl -a -t exec -vv /Applications/calsync.app
 xcrun stapler validate /Applications/calsync.app
+xcrun stapler validate ~/Downloads/calsync_<version>_aarch64.dmg
 ```
 
 - Gatekeeper が受け入れる(警告なしで起動する)
