@@ -24,7 +24,11 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "config_parse", err.Error(), "設定ファイルの YAML が壊れています。手で修復してください")
 		return
 	}
-	fi, _ := os.Stat(s.ConfigPath)
+	fi, err := os.Stat(s.ConfigPath)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "config_stat", err.Error(), "")
+		return
+	}
 	writeJSON(w, map[string]any{"raw": raw, "mtime": strconv.FormatInt(fi.ModTime().UnixNano(), 10)})
 }
 
@@ -51,6 +55,10 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	fi, _ := os.Stat(s.ConfigPath)
+	fi, err := os.Stat(s.ConfigPath)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "config_stat", err.Error(), "")
+		return
+	}
 	writeJSON(w, map[string]any{"ok": true, "mtime": strconv.FormatInt(fi.ModTime().UnixNano(), 10)})
 }

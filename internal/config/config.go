@@ -118,7 +118,7 @@ type RawAccount struct {
 	Calendars               []string `yaml:"calendars,omitempty" json:"calendars,omitempty"`
 	DigestCalendars         []string `yaml:"digest_calendars,omitempty" json:"digest_calendars,omitempty"`
 	BlockerCalendar         string   `yaml:"blocker_calendar,omitempty" json:"blocker_calendar,omitempty"`
-	ShowOriginInDescription bool     `yaml:"show_origin_in_description,omitempty" json:"show_origin_in_description,omitempty"`
+	ShowOriginInDescription *bool    `yaml:"show_origin_in_description,omitempty" json:"show_origin_in_description,omitempty"` // 未指定(nil)と false を区別する(SaveConfig の書き戻しで明示 false を保つため)
 }
 
 type RawDetailSync struct {
@@ -250,13 +250,15 @@ func Parse(data []byte, source string) (*Config, error) {
 	seen := make(map[string]bool, len(raw.Accounts))
 	for i, ra := range raw.Accounts {
 		a := Account{
-			ID:                      ra.ID,
-			Provider:                ra.Provider,
-			Email:                   ra.Email,
-			Calendars:               ra.Calendars,
-			DigestCalendars:         ra.DigestCalendars,
-			BlockerCalendar:         ra.BlockerCalendar,
-			ShowOriginInDescription: ra.ShowOriginInDescription,
+			ID:              ra.ID,
+			Provider:        ra.Provider,
+			Email:           ra.Email,
+			Calendars:       ra.Calendars,
+			DigestCalendars: ra.DigestCalendars,
+			BlockerCalendar: ra.BlockerCalendar,
+		}
+		if ra.ShowOriginInDescription != nil {
+			a.ShowOriginInDescription = *ra.ShowOriginInDescription
 		}
 		if a.ID == "" {
 			return nil, fmt.Errorf("config: accounts[%d]: id is required", i)

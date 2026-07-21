@@ -22,6 +22,7 @@ accounts:
   # personal account comment
   - id: personal
     provider: google
+    show_origin_in_description: false # keep anonymous per policy
   - id: work-ms
     provider: microsoft
 `
@@ -86,6 +87,27 @@ func TestSaveConfigConflict(t *testing.T) {
 	raw := loadRaw(t, p)
 	if err := SaveConfig(p, raw, mtime.Add(-time.Second)); !errors.Is(err, ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
+	}
+}
+
+// TestSaveConfigPreservesExplicitFalseBool は show_origin_in_description のような
+// *bool フィールドについて、明示的な false(既定値と同じ)がキーごと消えたり、
+// そのキーに付いた行コメントが失われたりしないことを確認する回帰テスト。
+// RawAccount.ShowOriginInDescription が plain bool のままだと、omitempty により
+// 「明示 false」と「未指定」が区別できず、書き戻し時にキーとコメントが消えていた。
+func TestSaveConfigPreservesExplicitFalseBool(t *testing.T) {
+	p, mtime := writeSeed(t)
+	raw := loadRaw(t, p)
+	raw.PollInterval = "2m" // show_origin_in_description には触れず、他の値だけ変更する
+	if err := SaveConfig(p, raw, mtime); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	out, _ := os.ReadFile(p)
+	s := string(out)
+	for _, want := range []string{"show_origin_in_description: false", "# keep anonymous per policy"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("missing %q in:\n%s", want, s)
+		}
 	}
 }
 
