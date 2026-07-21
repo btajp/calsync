@@ -18,10 +18,14 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/oauth2"
+
+	"github.com/btajp/calsync/internal/auth"
 )
 
-// Server は appserver の状態と依存を保持する。RunFlow / ListCals / Probe は
-// 後続タスクで追加される。
+// Server は appserver の状態と依存を保持する。ListCals / Probe は後続タスクで
+// 追加される。
 type Server struct {
 	ConfigPath string
 	DataDir    string
@@ -33,6 +37,10 @@ type Server struct {
 	// docker が PATH に無い環境でも detectDaemon を決定的にするためテストで
 	// 差し替え可能にしてある。
 	LookPath func(string) (string, error)
+	// RunFlow は OAuth 認可フロー本体(既定 auth.RunLoopbackFlow)。テストは
+	// フェイクを注入してブラウザ操作なしに検証する。
+	RunFlow func(ctx context.Context, ocfg *oauth2.Config, port int) (*oauth2.Token, error)
+	authSt  authState
 }
 
 // New は既定の依存(実 exec ベースの Runner・os.Getuid・既定 plist パス)で
@@ -47,6 +55,8 @@ func New(configPath, dataDir, token string) *Server {
 		UID:        os.Getuid(),
 		PlistPath:  filepath.Join(home, "Library", "LaunchAgents", "com.btajp.calsync.plist"),
 		LookPath:   exec.LookPath,
+		RunFlow:    auth.RunLoopbackFlow,
+		authSt:     authState{phase: "idle"},
 	}
 }
 
@@ -57,6 +67,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/daemon/{action}", s.handleDaemonAction)
 	mux.HandleFunc("GET /api/config", s.handleConfigGet)
 	mux.HandleFunc("PUT /api/config", s.handleConfigPut)
+	mux.HandleFunc("POST /api/auth/start", s.handleAuthStart)
+	mux.HandleFunc("GET /api/auth/state", s.handleAuthState)
+	mux.HandleFunc("POST /api/auth/cancel", s.handleAuthCancel)
 	return s.requireToken(mux)
 }
 
