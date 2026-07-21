@@ -55,6 +55,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("POST /api/daemon/{action}", s.handleDaemonAction)
+	mux.HandleFunc("GET /api/config", s.handleConfigGet)
+	mux.HandleFunc("PUT /api/config", s.handleConfigPut)
 	return s.requireToken(mux)
 }
 

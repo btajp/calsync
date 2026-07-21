@@ -75,57 +75,57 @@ type DetailSyncPair struct {
 // Raw は YAML の生の形。KnownFields(true) の照合対象になるため、
 // 受理するキーはここに列挙されたものが全て。
 type Raw struct {
-	PollInterval      string           `yaml:"poll_interval" json:"poll_interval,omitempty"`
-	SyncWindow        string           `yaml:"sync_window" json:"sync_window,omitempty"`
-	BlockerTitle      string           `yaml:"blocker_title" json:"blocker_title,omitempty"`
-	ReconcileAt       string           `yaml:"reconcile_at" json:"reconcile_at,omitempty"`
-	DedupeSameMeeting *bool            `yaml:"dedupe_same_meeting" json:"dedupe_same_meeting,omitempty"` // 未指定(nil)と false を区別する
-	BusyShowAs        []string         `yaml:"busy_show_as" json:"busy_show_as,omitempty"`
-	Notifications     RawNotifications `yaml:"notifications" json:"notifications,omitempty"`
-	Providers         RawProviders     `yaml:"providers" json:"providers,omitempty"`
-	Accounts          []RawAccount     `yaml:"accounts" json:"accounts,omitempty"`
-	DetailSync        []RawDetailSync  `yaml:"detail_sync" json:"detail_sync,omitempty"`
+	PollInterval      string           `yaml:"poll_interval,omitempty" json:"poll_interval,omitempty"`
+	SyncWindow        string           `yaml:"sync_window,omitempty" json:"sync_window,omitempty"`
+	BlockerTitle      string           `yaml:"blocker_title,omitempty" json:"blocker_title,omitempty"`
+	ReconcileAt       string           `yaml:"reconcile_at,omitempty" json:"reconcile_at,omitempty"`
+	DedupeSameMeeting *bool            `yaml:"dedupe_same_meeting,omitempty" json:"dedupe_same_meeting,omitempty"` // 未指定(nil)と false を区別する
+	BusyShowAs        []string         `yaml:"busy_show_as,omitempty" json:"busy_show_as,omitempty"`
+	Notifications     RawNotifications `yaml:"notifications,omitempty" json:"notifications,omitempty"`
+	Providers         RawProviders     `yaml:"providers,omitempty" json:"providers,omitempty"`
+	Accounts          []RawAccount     `yaml:"accounts,omitempty" json:"accounts,omitempty"`
+	DetailSync        []RawDetailSync  `yaml:"detail_sync,omitempty" json:"detail_sync,omitempty"`
 }
 
 type RawNotifications struct {
-	Slack *RawSlack `yaml:"slack" json:"slack,omitempty"`
+	Slack *RawSlack `yaml:"slack,omitempty" json:"slack,omitempty"`
 }
 
 type RawSlack struct {
-	BotTokenEnv   string `yaml:"bot_token_env" json:"bot_token_env,omitempty"`
-	Channel       string `yaml:"channel" json:"channel,omitempty"`
-	MorningDigest string `yaml:"morning_digest" json:"morning_digest,omitempty"`
-	RemindBefore  string `yaml:"remind_before" json:"remind_before,omitempty"`
+	BotTokenEnv   string `yaml:"bot_token_env,omitempty" json:"bot_token_env,omitempty"`
+	Channel       string `yaml:"channel,omitempty" json:"channel,omitempty"`
+	MorningDigest string `yaml:"morning_digest,omitempty" json:"morning_digest,omitempty"`
+	RemindBefore  string `yaml:"remind_before,omitempty" json:"remind_before,omitempty"`
 }
 
 type RawProviders struct {
-	Google    RawGoogleProvider    `yaml:"google" json:"google,omitempty"`
-	Microsoft RawMicrosoftProvider `yaml:"microsoft" json:"microsoft,omitempty"`
+	Google    RawGoogleProvider    `yaml:"google,omitempty" json:"google,omitempty"`
+	Microsoft RawMicrosoftProvider `yaml:"microsoft,omitempty" json:"microsoft,omitempty"`
 }
 
 type RawGoogleProvider struct {
-	CredentialsFile string `yaml:"credentials_file" json:"credentials_file,omitempty"`
+	CredentialsFile string `yaml:"credentials_file,omitempty" json:"credentials_file,omitempty"`
 }
 
 type RawMicrosoftProvider struct {
-	ClientID string `yaml:"client_id" json:"client_id,omitempty"`
+	ClientID string `yaml:"client_id,omitempty" json:"client_id,omitempty"`
 }
 
 type RawAccount struct {
-	ID                      string   `yaml:"id" json:"id,omitempty"`
-	Provider                string   `yaml:"provider" json:"provider,omitempty"`
-	Email                   string   `yaml:"email" json:"email,omitempty"`
-	Calendars               []string `yaml:"calendars" json:"calendars,omitempty"`
-	DigestCalendars         []string `yaml:"digest_calendars" json:"digest_calendars,omitempty"`
-	BlockerCalendar         string   `yaml:"blocker_calendar" json:"blocker_calendar,omitempty"`
-	ShowOriginInDescription bool     `yaml:"show_origin_in_description" json:"show_origin_in_description,omitempty"`
+	ID                      string   `yaml:"id,omitempty" json:"id,omitempty"`
+	Provider                string   `yaml:"provider,omitempty" json:"provider,omitempty"`
+	Email                   string   `yaml:"email,omitempty" json:"email,omitempty"`
+	Calendars               []string `yaml:"calendars,omitempty" json:"calendars,omitempty"`
+	DigestCalendars         []string `yaml:"digest_calendars,omitempty" json:"digest_calendars,omitempty"`
+	BlockerCalendar         string   `yaml:"blocker_calendar,omitempty" json:"blocker_calendar,omitempty"`
+	ShowOriginInDescription bool     `yaml:"show_origin_in_description,omitempty" json:"show_origin_in_description,omitempty"`
 }
 
 type RawDetailSync struct {
-	From       string   `yaml:"from" json:"from,omitempty"`
-	To         string   `yaml:"to" json:"to,omitempty"`
-	Fields     []string `yaml:"fields" json:"fields,omitempty"`
-	Visibility string   `yaml:"visibility" json:"visibility,omitempty"`
+	From       string   `yaml:"from,omitempty" json:"from,omitempty"`
+	To         string   `yaml:"to,omitempty" json:"to,omitempty"`
+	Fields     []string `yaml:"fields,omitempty" json:"fields,omitempty"`
+	Visibility string   `yaml:"visibility,omitempty" json:"visibility,omitempty"`
 }
 
 var syncWindowRe = regexp.MustCompile(`^([0-9]+)(mo|d)$`)
