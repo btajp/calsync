@@ -156,3 +156,10 @@ func TestOauthConfigForMicrosoftUsesLocalhostRedirect(t *testing.T) {
 	// アプリ登録 http://localhost に合わせ「localhost・パスなし」の形にする。
 	require.Equal(t, "http://localhost", oc.RedirectURL)
 }
+
+func TestAppserverCommandRegistered(t *testing.T) {
+	cmd, _, err := rootCmd.Find([]string{"appserver"})
+	if err != nil || cmd.Name() != "appserver" {
+		t.Fatalf("appserver command not registered: %v", err)
+	}
+}
