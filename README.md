@@ -231,6 +231,8 @@ npm run tauri dev       # 開発起動(GUI が立ち上がります)
 
 内部的には Tauri の Rust 殻が `calsync appserver` サブコマンド(127.0.0.1 限定・起動ごとに生成するワンタイム Bearer トークン)をサイドカーとして起動し、フロントエンドがそれを叩く構成です。起動直後に殻へポートとトークンを 1 行 JSON で渡すハンドシェイクを行い、殻のプロセスが終了して標準入力が EOF になると appserver 自身も終了します(孤児化防止)。手動で `calsync appserver` を直接実行する必要は通常ありません。
 
+署名済み(Developer ID + 公証済み)の dmg として配布用リリースを作成する手順は [デスクトップアプリ 署名・公証・GitHub 公開ランブック](docs/desktop-release-runbook.md) を参照してください。
+
 ## CLI リファレンス
 
 | コマンド | 説明 |
