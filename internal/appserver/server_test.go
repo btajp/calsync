@@ -269,3 +269,74 @@ func TestServeHandshake(t *testing.T) {
 		t.Fatalf("serve: %v", err)
 	}
 }
+
+func TestCORSPreflightAllowedOrigin(t *testing.T) {
+	s, _ := testServer(t)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	// プリフライトにはトークンが載らない(ブラウザ仕様)。認証なしで 204 が返ること
+	req, _ := http.NewRequest("OPTIONS", srv.URL+"/api/status", nil)
+	req.Header.Set("Origin", "tauri://localhost")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	req.Header.Set("Access-Control-Request-Headers", "authorization")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	if got := res.Header.Get("Access-Control-Allow-Origin"); got != "tauri://localhost" {
+		t.Fatalf("allow-origin = %q", got)
+	}
+	if got := res.Header.Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Authorization") {
+		t.Fatalf("allow-headers = %q", got)
+	}
+}
+
+func TestCORSActualRequestEchoesOrigin(t *testing.T) {
+	s, _ := testServer(t)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	req, _ := http.NewRequest("GET", srv.URL+"/api/status", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Origin", "tauri://localhost")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	if got := res.Header.Get("Access-Control-Allow-Origin"); got != "tauri://localhost" {
+		t.Fatalf("allow-origin = %q", got)
+	}
+}
+
+func TestCORSDisallowedOrigin(t *testing.T) {
+	s, _ := testServer(t)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	// 未許可オリジンのプリフライトは 403・CORS ヘッダなし
+	pre, _ := http.NewRequest("OPTIONS", srv.URL+"/api/status", nil)
+	pre.Header.Set("Origin", "https://evil.example")
+	pre.Header.Set("Access-Control-Request-Method", "GET")
+	preRes, err := http.DefaultClient.Do(pre)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preRes.StatusCode != http.StatusForbidden || preRes.Header.Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("preflight status=%d acao=%q", preRes.StatusCode, preRes.Header.Get("Access-Control-Allow-Origin"))
+	}
+	// 未許可オリジン付きの実リクエストにも CORS ヘッダを付けない(トークンが正しくても)
+	req, _ := http.NewRequest("GET", srv.URL+"/api/status", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Origin", "https://evil.example")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Header.Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("acao must be empty for disallowed origin")
+	}
+}
