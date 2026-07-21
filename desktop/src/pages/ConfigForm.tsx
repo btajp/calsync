@@ -28,21 +28,21 @@ function csvToList(text: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+// id/provider や show_origin_in_description(*bool 相当)は他フィールドの後ろで spread するので
+// ここでは触らず素通しする(値も、キー自体の有無も変えない)。
 function normalizeAccount(a: RawAccount): RawAccount {
   return {
-    id: a.id,
-    provider: a.provider,
+    ...a,
     email: strOrUndef(a.email),
     calendars: arrOrUndef(a.calendars),
     digest_calendars: arrOrUndef(a.digest_calendars),
     blocker_calendar: strOrUndef(a.blocker_calendar),
-    // *bool 相当(undefined/true/false の3値)なので素通しする。false を undefined に潰さない
-    show_origin_in_description: a.show_origin_in_description,
   };
 }
 
 function normalizeDetailSync(d: RawDetailSync): RawDetailSync {
   return {
+    ...d,
     from: strOrUndef(d.from),
     to: strOrUndef(d.to),
     fields: arrOrUndef(d.fields),
@@ -53,6 +53,7 @@ function normalizeDetailSync(d: RawDetailSync): RawDetailSync {
 function normalizeSlack(s: RawSlack | undefined): RawSlack | undefined {
   if (!s) return undefined;
   const out: RawSlack = {
+    ...s,
     bot_token_env: strOrUndef(s.bot_token_env),
     channel: strOrUndef(s.channel),
     morning_digest: strOrUndef(s.morning_digest),
@@ -81,11 +82,12 @@ export function normalizeRaw(raw: RawConfig): RawConfig {
   const hasProviders = googleFile !== undefined || msClientId !== undefined;
 
   return {
+    // dedupe_same_meeting は上の spread でそのまま(undefined/true/false 3値)引き継がれる
+    ...raw,
     poll_interval: strOrUndef(raw.poll_interval),
     sync_window: strOrUndef(raw.sync_window),
     blocker_title: strOrUndef(raw.blocker_title),
     reconcile_at: strOrUndef(raw.reconcile_at),
-    dedupe_same_meeting: raw.dedupe_same_meeting,
     busy_show_as: arrOrUndef(raw.busy_show_as),
     notifications: slack ? { slack } : undefined,
     providers: hasProviders
@@ -637,8 +639,13 @@ export default function ConfigForm({ api, onGoToAccountAdd }: { api: ApiClient; 
               を実行してください。
             </p>
           )}
-          {daemonMode !== "launchd" && daemonMode !== "container" && (
+          {daemonMode !== null && daemonMode !== "launchd" && daemonMode !== "container" && (
             <p className="hint">launchd 管理外です。デーモンプロセスを手動で再起動して設定を反映してください。</p>
+          )}
+          {daemonMode === null && (
+            <p className="hint">
+              デーモンの状態を確認できませんでした。手動で再起動するか、アプリを再読み込みして状態を確認してください。
+            </p>
           )}
         </section>
       )}
