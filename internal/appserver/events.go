@@ -56,6 +56,12 @@ type eventsCacheEntry struct {
 // 処理する(スペック §4)。ブロッカー除外の一次判定に mappings(SQLite・
 // OpenReadOnly)が必要なため、doctor と同じく launchd 管理外は 409 で拒否する
 // (container はここで Mode が "container" になり同じく 409 not_launchd になる)。
+//
+// タイムゾーン契約: from/to は閲覧者のローカルオフセット付き RFC3339 で送ること
+// (例 "2026-07-21T00:00:00+09:00")。終日イベントの日付境界(model.Window ベース
+// の CollectWindow の終日交差判定)は from/to が保持するオフセットの現地日付で
+// 解釈される。UTC(例 "...Z")を送ると、UTC の日付境界と閲覧者の実際のカレンダー
+// 日付境界がずれる TZ(JST 等)では終日イベントの表示日が 1 日ずれる。
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if info := s.detectDaemon(r.Context()); info.Mode != "launchd" {
 		writeErr(w, http.StatusConflict, "not_launchd",

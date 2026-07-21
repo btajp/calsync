@@ -68,3 +68,45 @@ func TestCollectWindowExcludesBlockersAcrossMultiDay(t *testing.T) {
 	require.Len(t, entries, 1)
 	require.Equal(t, "本物の予定", entries[0].Title)
 }
+
+// TestCollectWindowAllDayBoundaryDependsOnWindowOffset は、終日イベントの
+// 日付境界判定が w.Start/w.End が保持するオフセット(Location)に依存すること、
+// つまり appserver の /api/events が「閲覧者のローカルオフセット付き RFC3339」を
+// 要求する契約の根拠を検証する(events.go の handleEvents doc コメント、
+// デスクトップカレンダービュー設計 2026-07-21 §4)。
+//
+// jstWindow と utcWindow は絶対時刻としては全く同一の瞬間区間(jstWindow.UTC()
+// を取っただけ)だが、winStartDate/winEndDateInclusive は各時刻が保持する
+// Location でフォーマットされるため文字列が変わる: JST の "2026-07-05" 00:00
+// は UTC 表記だと前日 "2026-07-04" 15:00 になり、CollectWindow が算出する
+// 現地日付ラベルが 1 日ずれる。これにより、JST の暦日 7/5 の終日イベントは
+// jstWindow(+09:00 のまま送った場合)では含まれるが、utcWindow(UTC に変換して
+// 送った場合)では消える — フロントが UTC を送ってはいけない理由そのもの。
+func TestCollectWindowAllDayBoundaryDependsOnWindowOffset(t *testing.T) {
+	e, f := newTestEngine(t)
+	f.SetFullState(refA, []model.NormalizedEvent{
+		{ID: "jst-day", ICalUID: "jst-day@x", Title: "JST 7/5 の終日", IsAllDay: true, AllDayStart: "2026-07-05", AllDayEnd: "2026-07-06", IsBusy: true},
+	})
+	f.SetFullState(model.CalendarRef{AccountID: "b", CalendarID: "primary"}, nil)
+	f.SetFullState(model.CalendarRef{AccountID: "c", CalendarID: "primary"}, nil)
+
+	// jstWindow: JST の暦日 7/5 をそのまま +09:00 で表した窓(正しい契約)。
+	jstStart := time.Date(2026, 7, 5, 0, 0, 0, 0, jstLoc)
+	jstEnd := time.Date(2026, 7, 6, 0, 0, 0, 0, jstLoc)
+	jstWindow := model.Window{Start: jstStart, End: jstEnd}
+
+	// utcWindow: jstWindow と絶対時刻は完全に同一(.UTC() は瞬間を変えない)だが、
+	// Location が UTC になるため Format("2006-01-02") の結果が変わる
+	// (フロントが誤って "Z" 付きに変換して送った場合の再現)。
+	utcWindow := model.Window{Start: jstStart.UTC(), End: jstEnd.UTC()}
+	require.True(t, jstWindow.Start.Equal(utcWindow.Start), "same instant, different Location")
+	require.True(t, jstWindow.End.Equal(utcWindow.End), "same instant, different Location")
+
+	jstEntries, failed := e.CollectWindow(context.Background(), jstWindow)
+	require.Empty(t, failed)
+	require.Len(t, jstEntries, 1, "JST offset window must include the JST calendar-day all-day event")
+
+	utcEntries, failed := e.CollectWindow(context.Background(), utcWindow)
+	require.Empty(t, failed)
+	require.Empty(t, utcEntries, "UTC-converted window must NOT include it (date label shifts a day earlier)")
+}
