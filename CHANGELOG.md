@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-22
+
 ### Added
 
 - **appserver: デスクトップアプリの統合カレンダービュー(フェーズ2)向けバックエンドを追加**: `GET /api/events?from=&to=&refresh=` が全アカウントの実予定(ブロッカー除外・free 含む・digest_calendars 含む)をライブ取得で返す。launchd 管理下限定(mappings 読み取りに DB アクセスが要るため。container 運用は既存ガードで同じく 409)。窓幅は最大 62 日、(from,to) 単位で 60 秒メモリキャッシュ(`refresh=1` でバイパス)。トークンは `oauth2.StaticTokenSource` の読み取り専用経路(`internal/clients.BuildReadOnlyProvider`)を新設し、稼働中デーモンとの Microsoft リフレッシュトークンローテーション競合を構造的に回避。エンジン側は Slack ダイジェスト収集ロジック(`collectDigest`/`digestIncludes`)を任意の複数日窓へ一般化した `Engine.CollectWindow` を追加し、既存ダイジェストはその薄い委譲に変更(既存ダイジェストの挙動・テストは無変更のまま通ることを確認済み)。終日イベントの日付境界は `from`/`to` に付けたオフセットで解釈される(閲覧者のローカルオフセット付き RFC3339 を送ること)。複数日にまたがる終日イベントの排他的終了日(`model.NormalizedEvent.AllDayEnd`)を `DigestEntry.AllDayEnd` → `EventOut.AllDayEnd`(`all_day_end`)まで運ぶ(欠けていると開始日を含まないビューでイベントが消えるため)
