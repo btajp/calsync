@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -24,6 +25,8 @@ import (
 	"github.com/btajp/calsync/internal/auth"
 	"github.com/btajp/calsync/internal/config"
 	"github.com/btajp/calsync/internal/doctor"
+	"github.com/btajp/calsync/internal/engine"
+	"github.com/btajp/calsync/internal/model"
 	"github.com/btajp/calsync/internal/provider/google"
 )
 
@@ -48,8 +51,15 @@ type Server struct {
 	ListCals func(ctx context.Context, cfg *config.Config, acct config.Account, dataDir string) ([]google.CalendarListEntry, error)
 	// Probe は GET /api/doctor の API 疎通確認(既定は nil。handleDoctor が
 	// cmd_doctor.go と同じ実装を都度組み立てる)。テストはフェイクを注入する。
-	Probe  doctor.Probe
-	authSt authState
+	Probe doctor.Probe
+	// CollectEvents は GET /api/events の実体(既定は nil。handleEvents が
+	// s.defaultCollectEvents を都度組み立てる)。テストはフェイクを注入して
+	// 読み取り専用プロバイダ・実 SQLite なしに検証する。
+	CollectEvents func(ctx context.Context, w model.Window) ([]engine.DigestEntry, []string, error)
+
+	authSt        authState
+	eventsCacheMu sync.Mutex
+	eventsCache   map[eventsCacheKey]eventsCacheEntry
 }
 
 // New は既定の依存(実 exec ベースの Runner・os.Getuid・既定 plist パス)で
@@ -82,6 +92,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/cancel", s.handleAuthCancel)
 	mux.HandleFunc("GET /api/accounts/{id}/calendars", s.handleCalendars)
 	mux.HandleFunc("GET /api/doctor", s.handleDoctor)
+	mux.HandleFunc("GET /api/events", s.handleEvents)
 	return s.withCORS(s.requireToken(mux))
 }
 

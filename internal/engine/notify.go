@@ -21,6 +21,7 @@ type DigestEntry struct {
 	EndUTC      time.Time
 	IsAllDay    bool
 	AllDayStart string
+	AllDayEnd   string // 排他的終了日(model.NormalizedEvent.AllDayEnd の写し。複数日終日イベントの表示用。Slack ダイジェスト表示(notify/slack)は参照しない)
 	MeetingURL  string
 	Description string // ダイジェストの blocks では使わない(リマインド用。v2 スペック 4 章)
 	HTMLLink    string
@@ -72,13 +73,25 @@ func (e *Engine) runDigest(ctx context.Context, scheduled time.Time) time.Time {
 }
 
 // collectDigest は対象日 day(そのローカル TZ の 00:00)の実予定をライブ取得で
-// 収集する(スペック 5 章)。newCursor は捨てる(カーソル規律に抵触しない)。
-// 戻り値 failed は取得に失敗したアカウント ID(設定順・重複なし)。
+// 収集する(スペック 5 章)。1 日窓で CollectWindow を呼ぶだけの薄い委譲(デスクトップ
+// カレンダービュー設計 2026-07-21 §2)。
 func (e *Engine) collectDigest(ctx context.Context, day time.Time) ([]DigestEntry, []string) {
-	dayStart := day
-	dayEnd := day.AddDate(0, 0, 1)
-	dayStr := day.Format("2006-01-02")
-	w := model.Window{Start: dayStart, End: dayEnd}
+	return e.CollectWindow(ctx, model.Window{Start: day, End: day.AddDate(0, 0, 1)})
+}
+
+// CollectWindow は任意の窓 w の実予定をライブ取得で収集する(旧 collectDigest の
+// 一般化。デスクトップカレンダービュー設計 2026-07-21 §2)。newCursor は捨てる
+// (カーソル規律に抵触しない — ダイジェストで実証済みのパターン)。
+// 戻り値 failed は取得に失敗したアカウント ID(設定順・重複なし)。
+func (e *Engine) CollectWindow(ctx context.Context, w model.Window) ([]DigestEntry, []string) {
+	// 終日判定の窓を現地日付の閉区間 [winStartDate, winEndDateInclusive] で表す
+	// (スペック: 「w.Start の現地日付」〜「w.End の前日の現地日付」)。w.End は
+	// 半開区間の排他境界(=次に含まれない瞬間)なので、1 日引くとその窓が実際に
+	// カバーする最終日になる。1 日窓(w.End = day+1日)に適用すると
+	// winStartDate == winEndDateInclusive == dayStr となり、旧 digestIncludes の
+	// dayStr 単一日比較と完全に一致する。
+	winStartDate := w.Start.Format("2006-01-02")
+	winEndDateInclusive := w.End.AddDate(0, 0, -1).Format("2006-01-02")
 
 	var (
 		entries []DigestEntry
@@ -89,12 +102,12 @@ func (e *Engine) collectDigest(ctx context.Context, day time.Time) ([]DigestEntr
 		acctFailed := false
 		p, err := e.providerFor(acct.ID)
 		if err != nil {
-			log.Printf("digest %s: %v", acct.ID, err)
+			log.Printf("collect window %s: %v", acct.ID, err)
 			failed = append(failed, acct.ID)
 			continue
 		}
 		// digest_calendars は監視対象(Calendars)には含まれない通知専用カレンダー。
-		// ダイジェストのライブ取得にだけ acct.Calendars の後ろに連結して参加させる
+		// ライブ取得にだけ acct.Calendars の後ろに連結して参加させる
 		// (フィルタ・dedupe・failed 集約は既存のループをそのまま流用する。スペック 2 章)。
 		digestCalIDs := make([]string, 0, len(acct.Calendars)+len(acct.DigestCalendars))
 		digestCalIDs = append(digestCalIDs, acct.Calendars...)
@@ -106,14 +119,14 @@ func (e *Engine) collectDigest(ctx context.Context, day time.Time) ([]DigestEntr
 			ref := model.CalendarRef{AccountID: acct.ID, CalendarID: calID}
 			evs, _, err := p.Changes(ctx, ref, "", w)
 			if err != nil {
-				log.Printf("digest %s: %v", ref, err)
+				log.Printf("collect window %s: %v", ref, err)
 				acctFailed = true
 				break
 			}
 			for _, ev := range evs {
-				include, err := e.digestIncludes(ref, ev, dayStart, dayEnd, dayStr)
+				include, err := e.windowIncludes(ref, ev, w, winStartDate, winEndDateInclusive)
 				if err != nil {
-					log.Printf("digest %s: %v", ref, err)
+					log.Printf("collect window %s: %v", ref, err)
 					acctFailed = true
 					break
 				}
@@ -133,12 +146,15 @@ func (e *Engine) collectDigest(ctx context.Context, day time.Time) ([]DigestEntr
 	return entries, failed
 }
 
-// digestIncludes は 1 イベントがダイジェスト対象かを判定する(スペック 5 章)。
+// windowIncludes は 1 イベントが窓 w の対象かを判定する(旧 digestIncludes の一般化。
+// デスクトップカレンダービュー設計 2026-07-21 §2)。
 // 除外: 削除・辞退・ブロッカー(mappings 一次 + タグ二次。Graph delta はタグを
 // 返せないため二次判定はライブ取得経路では Google のみ有効)。free は含める。
-// 当日判定: 時刻指定は UTC 重なり、終日は現地日付の文字列比較。
-// Window.Contains の終日 UTC 近似は 1 日幅では前日/翌日を誤包含するため使わない。
-func (e *Engine) digestIncludes(ref model.CalendarRef, ev model.NormalizedEvent, dayStart, dayEnd time.Time, dayStr string) (bool, error) {
+// 時刻指定: UTC 区間の重なり(w.Start/w.End そのもの)。
+// 終日: 現地日付範囲の交差([winStartDate, winEndDateInclusive] と
+// [AllDayStart, AllDayEnd) の交差。AllDayEnd 空は単日イベントとして扱う)。
+// Window.Contains の終日 UTC 近似は日付境界で前日/翌日を誤包含しうるため使わない。
+func (e *Engine) windowIncludes(ref model.CalendarRef, ev model.NormalizedEvent, w model.Window, winStartDate, winEndDateInclusive string) (bool, error) {
 	if ev.Deleted || ev.IsDeclined || ev.OriginTag != "" {
 		return false, nil
 	}
@@ -154,16 +170,17 @@ func (e *Engine) digestIncludes(ref model.CalendarRef, ev model.NormalizedEvent,
 			return false, nil
 		}
 		if ev.AllDayEnd == "" {
-			return ev.AllDayStart == dayStr, nil
+			return winStartDate <= ev.AllDayStart && ev.AllDayStart <= winEndDateInclusive, nil
 		}
-		return ev.AllDayStart <= dayStr && dayStr < ev.AllDayEnd, nil
+		return ev.AllDayStart <= winEndDateInclusive && winStartDate < ev.AllDayEnd, nil
 	}
-	return ev.EndUTC.After(dayStart) && ev.StartUTC.Before(dayEnd), nil
+	return ev.EndUTC.After(w.Start) && ev.StartUTC.Before(w.End), nil
 }
 
 // appendDigestEntry は dedupe_same_meeting=true のとき同一 iCalUID+開始時刻の
 // エントリを 1 行に統合する(由来アカウント併記。件名は設定順で最初の非空を採用
-// する決定的規則。スペック 5 章)。
+// する決定的規則。スペック 5 章)。AllDayStart/AllDayEnd は統合後も書き換えない
+// (先勝ち。生成時の値のまま)
 func (e *Engine) appendDigestEntry(entries *[]DigestEntry, byKey map[string]int, accountID string, ev model.NormalizedEvent) {
 	entry := DigestEntry{
 		Title:       ev.Title,
@@ -171,6 +188,7 @@ func (e *Engine) appendDigestEntry(entries *[]DigestEntry, byKey map[string]int,
 		EndUTC:      ev.EndUTC,
 		IsAllDay:    ev.IsAllDay,
 		AllDayStart: ev.AllDayStart,
+		AllDayEnd:   ev.AllDayEnd,
 		MeetingURL:  ev.MeetingURL,
 		Description: ev.Description,
 		HTMLLink:    ev.HTMLLink,

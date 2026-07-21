@@ -214,3 +214,48 @@ p.error {
   margin: 0;
   flex: 1;
 }
+
+.calendar-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.calendar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.legend-chip {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 3px;
+}
+
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 1px solid #b00020;
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+}
+
+.banner p {
+  margin: 0;
+}
+
+.banner-warning {
+  border-color: #b8860b;
+  background: rgba(184, 134, 11, 0.1);
+}

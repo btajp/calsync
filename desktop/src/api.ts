@@ -1,4 +1,4 @@
-import type { AuthState, CalendarListEntry, RawConfig, StatusResponse } from "./types";
+import type { AuthState, CalendarListEntry, EventsResponse, RawConfig, StatusResponse } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -60,4 +60,12 @@ export class ApiClient {
     return this.req<{ ok: boolean }>("POST", `/api/daemon/${action}`);
   }
   doctor() { return this.req<{ ok: boolean; text: string }>("GET", "/api/doctor"); }
+  // from/to はローカルオフセット付き RFC3339 で渡すこと(formatLocalRFC3339 参照。
+  // UTC を渡すと終日イベントの表示日が TZ によってずれる。デスクトップカレンダー
+  // ビュー設計 2026-07-21 §4)。refresh=true は appserver 側 60 秒キャッシュをバイパスする。
+  events(from: string, to: string, refresh?: boolean) {
+    const q = new URLSearchParams({ from, to });
+    if (refresh) q.set("refresh", "1");
+    return this.req<EventsResponse>("GET", `/api/events?${q.toString()}`);
+  }
 }

@@ -47,3 +47,19 @@ export interface StatusResponse {
 }
 export interface CalendarListEntry { id: string; summary: string; primary: boolean; access_role: string }
 export interface AuthState { phase: "idle" | "running" | "done" | "error"; account_id?: string; error?: string; hint?: string }
+
+// EventOut は GET /api/events の 1 件(internal/appserver/events.go の EventOut と
+// json タグを完全一致させること。desktop calendar view design 2026-07-21 §4)。
+export interface EventOut {
+  account_id: string;
+  account_ids: string[];
+  title: string;
+  start: string; // RFC3339
+  end: string; // RFC3339
+  all_day: boolean;
+  all_day_start: string; // YYYY-MM-DD(all_day 時のみ)
+  all_day_end: string; // 排他的終了日・YYYY-MM-DD(all_day 時、複数日イベントのみ非空)
+  meeting_url: string;
+  html_link: string;
+}
+export interface EventsResponse { events: EventOut[]; failed: string[] }
