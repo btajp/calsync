@@ -82,6 +82,35 @@ func BuildProvider(cfg *config.Config, tokens *auth.TokenStore, acct config.Acco
 	}
 }
 
+// BuildReadOnlyProvider は 1 アカウント分の読み取り専用 Provider を構築する。
+// トークンファイルをロードして oauth2.StaticTokenSource に包むだけで、
+// リフレッシュも TokenStore への書き戻しも一切行わない(BuildProvider の
+// PersistingTokenSource とは異なる)。
+//
+// 用途: appserver(デスクトップアプリの GET /api/events)が稼働中デーモンと
+// 同じトークンファイルを読む際、両者が同時にリフレッシュを試みると Microsoft の
+// リフレッシュトークンローテーションでどちらかが失効側を掴む競合が起こりうる
+// (デスクトップカレンダービュー設計 2026-07-21 §3)。静的トークンソースなら
+// 構造的にこの競合を避けられる。デーモンは毎分の同期でトークンを更新・永続化
+// しているためディスク上の access token は通常有効だが、期限切れ(エッジ)の
+// 場合はそのまま使われて API 側で 401(provider.ErrAuthExpired 相当)になる —
+// 呼び出し側がそのアカウントを failed 扱いにすること。
+func BuildReadOnlyProvider(cfg *config.Config, tokens *auth.TokenStore, acct config.Account) (provider.Provider, error) {
+	tok, err := tokens.Load(acct.ID)
+	if err != nil {
+		return nil, fmt.Errorf("account %s: no token (run: calsync auth add %s): %w", acct.ID, acct.ID, err)
+	}
+	ts := oauth2.StaticTokenSource(tok)
+	switch acct.Provider {
+	case "google":
+		return google.New(ts, acct.ID), nil
+	case "microsoft":
+		return msprov.New(ts, acct.ID, cfg.BusyShowAs), nil
+	default:
+		return nil, fmt.Errorf("account %s: unknown provider %q", acct.ID, acct.Provider)
+	}
+}
+
 // BuildGoogleClient は google 用の具象クライアントを返す(CalendarList 用)。
 // provider.Provider インターフェースには CalendarList が無いため具象型を返す。
 func BuildGoogleClient(cfg *config.Config, tokens *auth.TokenStore, acct config.Account) (*google.Client, error) {
