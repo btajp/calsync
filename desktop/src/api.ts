@@ -12,11 +12,19 @@ export class ApiError extends Error {
 }
 
 export class ApiClient {
+  private fetchFn: typeof fetch;
+
   constructor(
     private baseUrl: string,
     private token: string,
-    private fetchFn: typeof fetch = fetch,
-  ) {}
+    fetchFn?: typeof fetch,
+  ) {
+    // 既定はグローバル fetch を呼び出し時に解決するラッパーにする。`fetch` を
+    // そのまま既定値にすると this.fetchFn(...) 呼び出しで this が失われ、WebKit は
+    // "Can only call Window.fetch on instances of Window" で全リクエストが失敗する
+    // (desktop-v0.1.0 の実障害)。
+    this.fetchFn = fetchFn ?? ((input, init) => fetch(input, init));
+  }
 
   private async req<T>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await this.fetchFn(`${this.baseUrl}${path}`, {
