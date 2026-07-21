@@ -82,7 +82,43 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/cancel", s.handleAuthCancel)
 	mux.HandleFunc("GET /api/accounts/{id}/calendars", s.handleCalendars)
 	mux.HandleFunc("GET /api/doctor", s.handleDoctor)
-	return s.requireToken(mux)
+	return s.withCORS(s.requireToken(mux))
+}
+
+// allowedOrigins は CORS を許可するオリジン。Tauri の WebView(本番は
+// tauri://localhost)からの fetch はクロスオリジンになり、Authorization ヘッダ
+// 付きのためプリフライトが必須になる。これを許可しないと WebView 自身が API を
+// 呼べない(desktop-v0.1.1 の実障害: TypeError: Load failed)。Web ページの
+// オリジン(https://...)は列挙しないため、ブラウザ経由のアクセスは従来どおり
+// CORS で遮断され、かつ Bearer トークン必須も不変。
+var allowedOrigins = map[string]bool{
+	"tauri://localhost":     true, // 本番(macOS WKWebView)
+	"http://localhost:1420": true, // 開発(vite dev server)
+}
+
+// withCORS は許可オリジンへの CORS 応答を付与する。プリフライト(OPTIONS)は
+// 副作用がなくブラウザがトークンを載せない仕様のため、認証より前に応答する。
+func (s *Server) withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		allowed := allowedOrigins[origin]
+		if allowed {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
+		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
+			if !allowed {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Max-Age", "3600")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requireToken は Host 検証(DNS rebinding 対策)と Bearer トークン一致を両方

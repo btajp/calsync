@@ -110,7 +110,7 @@ internal/appserver/             # HTTP ハンドラ群(新規パッケージ)
 
 ## 6. appserver API
 
-すべて `127.0.0.1` bind・Bearer トークン必須・CORS 不許可。トークン不一致は一律 401。
+すべて `127.0.0.1` bind・Bearer トークン必須。CORS はアプリの WebView オリジン(`tauri://localhost` と開発用 `http://localhost:1420`)のみ許可(WebView 自身の fetch がクロスオリジンでありプリフライトを通す必要があるため。desktop-v0.1.1 の実障害)。トークン不一致は一律 401。
 
 | エンドポイント | 動作 | 再利用する既存コード |
 | --- | --- | --- |
@@ -170,7 +170,7 @@ flowchart TD
 ## 11. セキュリティ
 
 - API は 127.0.0.1 bind・エフェメラルポート・起動ごとに生成するワンタイム Bearer トークン。トークンは stdout 経由で殻だけが受け取る(ファイルに書かない)
-- CORS 不許可(ブラウザから叩かれても拒否)。全リクエストは `requireToken` ミドルウェアで Host 検証とワンタイム Bearer トークンの両方を通す: `Host` ヘッダが `127.0.0.1:` または `localhost:` で始まらないリクエストは 403 で拒否(DNS rebinding 対策)し、続けてトークン不一致を 401 で拒否する
+- CORS はアプリの WebView オリジン(`tauri://localhost`・開発用 `http://localhost:1420`)のみ許可。Web ページのオリジン(https 等)は列挙しないためブラウザ経由のアクセスは従来どおり CORS で遮断される。プリフライト(OPTIONS)はブラウザ仕様でトークンが載らないため認証より前に応答するが、副作用はなく、実リクエストには引き続きトークンが必須。全リクエストは `requireToken` ミドルウェアで Host 検証とワンタイム Bearer トークンの両方を通す: `Host` ヘッダが `127.0.0.1:` または `localhost:` で始まらないリクエストは 403 で拒否(DNS rebinding 対策)し、続けてトークン不一致を 401 で拒否する
 - トークン・credentials の値はログ・エラーメッセージ・API レスポンスに含めない
 - Tauri の capability は shell(サイドカー spawn)等の必要最小限のみ許可する
 

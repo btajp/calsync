@@ -12,6 +12,7 @@ export default function App() {
   const [api, setApi] = useState<ApiClient | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dataDir, setDataDir] = useState<string | null>(localStorage.getItem("calsync.dataDir"));
+  const [retry, setRetry] = useState(0); // 起動エラー画面の再試行で effect を再発火させる
 
   useEffect(() => {
     if (!dataDir) return;
@@ -24,7 +25,7 @@ export default function App() {
       })
       .catch((e) => setError(String(e)));
     return () => kill?.();
-  }, [dataDir]);
+  }, [dataDir, retry]);
 
   if (!dataDir) {
     return (
@@ -45,7 +46,23 @@ export default function App() {
       </main>
     );
   }
-  if (error) return <main className="error">起動エラー: {error}</main>;
+  if (error) {
+    return (
+      <main className="setup">
+        <h1>calsync</h1>
+        <UpdateBanner />
+        <p className="error">起動エラー: {error}</p>
+        <div className="button-row">
+          <button onClick={() => { setError(null); setRetry((r) => r + 1); }}>
+            再試行
+          </button>
+          <button className="link-button" onClick={() => { localStorage.removeItem("calsync.dataDir"); setError(null); setDataDir(null); }}>
+            データフォルダ変更
+          </button>
+        </div>
+      </main>
+    );
+  }
   if (!api) return <main>appserver に接続中…</main>;
   return <Shell api={api} onResetDataDir={() => { localStorage.removeItem("calsync.dataDir"); setDataDir(null); }} />;
 }
@@ -98,7 +115,12 @@ function Shell({ api, onResetDataDir }: { api: ApiClient; onResetDataDir: () => 
             行き止まりになり、修正版を配れなかった教訓) */}
         <UpdateBanner />
         <p className="error">状態確認に失敗しました: {modeCheckError}</p>
-        <button onClick={checkMode}>再試行</button>
+        <div className="button-row">
+          <button onClick={checkMode}>再試行</button>
+          <button className="link-button" onClick={onResetDataDir}>
+            データフォルダ変更
+          </button>
+        </div>
       </main>
     );
   }

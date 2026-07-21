@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-21
+
+### Fixed
+
+- **デスクトップアプリ: 本番ビルドで API リクエストが CORS で全滅する不具合を修正**(`TypeError: Load failed`)。パッケージ版の WebView は `tauri://localhost` オリジンで動くため `http://127.0.0.1` の appserver への fetch はプリフライト必須だが、appserver が OPTIONS を 401 で拒否していた。appserver に WebView オリジン(`tauri://localhost`・開発用 `http://localhost:1420`)限定の CORS 応答を追加(その他のオリジンは従来どおり遮断・Bearer トークン必須も不変)
+- **デスクトップアプリ: エラー画面から「データフォルダ変更」できない行き止まりを解消**。起動エラー画面・状態確認エラー画面の両方にフォルダ再指定と再試行の動線を追加
+
 ## [0.1.1] - 2026-07-21
 
 ### Fixed
