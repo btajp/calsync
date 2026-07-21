@@ -51,9 +51,12 @@ docker compose down --rmi local        # Docker: イメージも消す場合
 ## Step 4: ローカルデータとバイナリの削除
 
 ```bash
-rm -rf ./data                  # トークン・SQLite・設定。復元不能 — Step 2 完了後にのみ実行
-rm -f ~/.local/bin/calsync     # launchd 運用のバイナリ
+rm -rf ./data                     # トークン・SQLite・設定。復元不能 — Step 2 完了後にのみ実行
+rm -f ~/.local/bin/calsync        # launchd 運用のバイナリ
+rm -rf desktop/src-tauri/target   # デスクトップアプリ(desktop/)を使っていた場合のビルド成果物(サイドカーの calsync バイナリ含む)
 ```
+
+デスクトップアプリ(`desktop/`)から `npm run tauri build` で `.app` を生成し `/Applications` 等へコピーしていた場合はそれも削除する。**アプリ自体にアンインストール操作はない**(アカウント削除・ブロッカー掃除は本スキルの Step 0 の分岐に従うこと)。
 
 リポジトリの clone 自体も不要なら削除してよい。
 

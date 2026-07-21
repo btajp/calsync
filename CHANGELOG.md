@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **appserver: コンテナモードのガードを書き込み/認可系エンドポイントにも適用**: 仕様(§9)は「コンテナ運用のホストからは DB 読み取りを含む全機能を停止して案内表示モードに落とす」と定めていたが、実装は DB 読み取り(status)・doctor・デーモン操作のみをガードしており、`PUT /api/config`・`POST /api/auth/start`・`GET /api/accounts/{id}/calendars` はコンテナモードでも動作していた(ホストからのトークンファイル書き込みがコンテナ内デーモンの Microsoft refresh token ローテーションと競合しうる)。この 3 エンドポイントにコンテナモード検出時 409 `container_mode` を返すガードを追加。manual/launchd モードの挙動は変更なし。デスクトップアプリ側も、起動直後の状態確認でコンテナモードを検出したらタブ UI の代わりに案内画面を表示するよう変更
+- **appserver: `GET /api/status` の `tokens`(アカウント 0 件時)・`GET /api/accounts/{id}/calendars` の `calendars`(0 件時)が JSON `null` を返しデスクトップアプリがクラッシュする不具合を修正**: Go の nil スライスがそのまま JSON エンコードされていたため。両エンドポイントでレスポンスを空配列に初期化し、フロント側(`Dashboard.tsx` の `buildOverview`・`AccountAdd.tsx` のカレンダー取得)にも `?? []` の防御を追加
+- **appserver: launchd の plist はあるが `launchctl print` が未ロードを返す状態(stale plist)で、docker 版 calsync コンテナが稼働していても container モードを検出できていなかった不具合を修正**: デーモン検出順序を変更し、`launchctl print` 失敗時も docker のコンテナ検出を優先して試すようにした(ホストが誤ってコンテナ運用中の DB に読み取りアクセスしてしまうのを防止)
+- **appserver: HTTP リクエストの `Host` ヘッダを検証していなかった不具合を修正**: `requireToken` に Host 検証(`127.0.0.1:` / `localhost:` で始まらないリクエストは 403)を追加し、DNS rebinding 経由でのトークン窃取・API 呼び出しを防止
+
 ### Changed
 
 - `digest_calendars` と `blocker_calendar` の重複を設定エラーに(受領ブロッカーの置き場を通知専用カレンダーと兼ねる構成は「digest 専用にはブロッカーが無い」前提を崩すため拒否)
@@ -14,6 +21,8 @@
 
 ### Added
 
+- **macOS デスクトップアプリ(Tauri v2、`desktop/`)と `calsync appserver` サブコマンド**: ターミナルを使わずにダッシュボード(デーモン状態・構成俯瞰・doctor 実行・launchd の停止/起動/再起動)、設定(`data/calsync.yaml`)のフォーム編集(コメント保持保存・mtime 競合検出・再起動誘導)、アカウント追加ウィザード(前提チェック→OAuth→カレンダー選択→YAML 追記→再起動誘導)を行える GUI アプリを追加。デーモン本体は `calsync appserver` サブコマンド(127.0.0.1 限定・起動ごとのワンタイム Bearer トークン・stdout 1 行 JSON ハンドシェイク・stdin EOF で自動終了)をローカル API として提供し、Tauri の Rust 殻がサイドカーとして起動する。launchd 管理外で docker の calsync コンテナ稼働を検出した場合は DB 読み取りを含む全機能を停止する案内表示モードに落ちる(コンテナ運用のホストからの SQLite アクセス禁止という既存不変条件を維持)。アプリはアカウント削除機能を持たず `calsync-uninstall` へ誘導する。デーモン本体のビルド(CGO なし・Go のみ)には影響しない。ビルドには Rust + Node.js が別途必要(`cd desktop && npm install && npm run build-sidecar && npm run tauri dev` / `npm run tauri build`)
+- **Google OAuth スコープに `calendar.calendarlist.readonly` を追加**: デスクトップアプリのアカウント追加ウィザードでのカレンダー選択 UI に使用。新規認可時のみ自動付与され、既存トークンでは再認可するまでカレンダー一覧が取得できない(内部的には Google API の 403。アプリ画面には appserver 経由の 502 エラーとして表示され、カレンダー ID の手入力フォームにフォールバックする)
 - **アンインストール手順とアンインストール支援スキル**: README にアンインストール節(ブロッカー掃除 → 常駐解除 → データ削除 → アクセス権取り消し → クラウド側登録の削除、の安全な順序)を追加。エージェント向けに `.agents/skills/calsync-uninstall`(完全撤去・一部アカウント削除・ブロッカーのみ掃除の分岐と落とし穴を対話的にガイド)を追加
 - **detail_sync のペア別 visibility**: `detail_sync[].visibility`(`private`(既定)/ `default` / `public`)でペアのブロッカーの公開設定を制御可能に(Google: visibility / Microsoft: sensitivity へ写像、default・public はどちらも normal)。未指定は従来どおり非公開で、既存設定への影響なし(無風)。変更は次回リコンサイルで既存ブロッカーにも遡及
 - **ペア別タイトル/説明同期(`detail_sync`)**: トップレベル `detail_sync` で指定した origin => target アカウントペアに限り、ブロッカーのタイトル/説明を元イベントから転記(`fields: [title, description]` で選択)。既定は従来どおり完全匿名で、未設定なら保存ハッシュも従来と完全同一(アップグレード無風)。内容をハッシュに合成しているため元イベントの変更は次のポーリングで追従し、設定変更は次回リコンサイルで既存分にも遡及。併せて (1) Google の patch にタイトルを追加、(2) 両プロバイダの 409 復旧時に内容整合 patch を追加、(3) リコンサイル収容・再構築行は sentinel により 1 回だけ自己修復 patch されるように(ペア解除後に DB 再構築を挟んでも転記内容が残留しない)

@@ -1,8 +1,10 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -670,4 +672,30 @@ detail_sync:
 
 	require.Nil(t, cfg.DetailSyncFor("b", "a"), "方向は一方通行(逆方向は別エントリ)")
 	require.Nil(t, cfg.DetailSyncFor("a", "missing"))
+}
+
+func TestParseBytes(t *testing.T) {
+	yamlSrc := []byte(`
+providers:
+  google: {credentials_file: /tmp/creds.json}
+accounts:
+  - {id: personal, provider: google}
+  - {id: work-ms, provider: microsoft}
+`)
+	cfg, err := Parse(yamlSrc, "inline")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(cfg.Accounts) != 2 || cfg.Accounts[0].ID != "personal" {
+		t.Fatalf("unexpected accounts: %+v", cfg.Accounts)
+	}
+	// 不正値は source 名入りで拒否される
+	if _, err := Parse([]byte("poll_interval: banana"), "inline"); err == nil {
+		t.Fatal("want error for invalid poll_interval")
+	}
+	// Raw に JSON タグが付いている(API ボディ互換の要)
+	b, _ := json.Marshal(Raw{PollInterval: "1m"})
+	if !strings.Contains(string(b), `"poll_interval"`) {
+		t.Fatalf("Raw json tags missing: %s", b)
+	}
 }

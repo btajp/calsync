@@ -208,6 +208,29 @@ docker compose run --rm --entrypoint /calsync calsync reconcile --config /data/c
 docker compose start calsync
 ```
 
+## デスクトップアプリ(macOS)
+
+ターミナルを開かずに calsync を扱いたい場合、`desktop/` に Tauri v2 製の GUI アプリがあります。
+
+- **できること**: ダッシュボード(デーモン状態・アカウント別の最終同期・doctor 実行・launchd の停止/起動/再起動)、設定(`data/calsync.yaml`)のフォーム編集(コメントを保持したまま保存・外部変更を mtime で検出・保存後は再起動を誘導)、アカウント追加ウィザード(前提チェック → OAuth 認可 → カレンダー選択 → YAML 追記 → 再起動誘導)
+- **できないこと**: アカウントの削除(危険度が高いため非対応。[アカウントの削除](#アカウントの削除)または `calsync-uninstall` スキルを使ってください)、`calsync sync` / `calsync reconcile` の手動実行、予定のマージ表示
+- **コンテナ運用では使えません**: launchd 管理外で docker の calsync コンテナ稼働を検出すると、DB 読み取りを含む全機能を止めて案内表示のみのモードになります(VirtioFS 境界越しのホスト読み取りで DB が破損した実績があるため。詳細は [CLAUDE.md](CLAUDE.md) を参照)。コンテナ運用でのアカウント追加・設定変更は従来どおり本 README の CLI 手順で行ってください
+- **Google のカレンダー選択**: OAuth スコープに `calendar.calendarlist.readonly` を追加しています。新規認可(このアプリでの初回認可・再認可)には自動的に付与されますが、既存のトークンには付与されていないためカレンダー一覧が取得できないことがあります(内部的には Google API が 403 を返し、アプリ画面には appserver 経由の 502 エラーとして表示されます)。その場合アプリはカレンダー ID の手入力フォームにフォールバックします
+
+### ビルドと起動
+
+前提: Rust と Node.js(デーモン本体のビルドは従来どおり Go のみで、これらは `desktop/` のビルドにのみ必要です)。
+
+```bash
+cd desktop
+npm install
+npm run build-sidecar   # calsync 本体を Go でビルドし、Tauri の externalBin(サイドカー)として配置
+npm run tauri dev       # 開発起動(GUI が立ち上がります)
+# npm run tauri build   # .app を生成(署名・公証はしません。自分でビルドして使う前提です)
+```
+
+内部的には Tauri の Rust 殻が `calsync appserver` サブコマンド(127.0.0.1 限定・起動ごとに生成するワンタイム Bearer トークン)をサイドカーとして起動し、フロントエンドがそれを叩く構成です。起動直後に殻へポートとトークンを 1 行 JSON で渡すハンドシェイクを行い、殻のプロセスが終了して標準入力が EOF になると appserver 自身も終了します(孤児化防止)。手動で `calsync appserver` を直接実行する必要は通常ありません。
+
 ## CLI リファレンス
 
 | コマンド | 説明 |
@@ -217,6 +240,7 @@ docker compose start calsync
 | `calsync reconcile` | フルリコンサイル手動実行(ウィンドウスライド・孤児収容・DB 再構築を含む) |
 | `calsync status` | 各カレンダーの最終同期時刻・エラー状態(reauth_required 等) |
 | `calsync doctor` | 設定・トークン・API 疎通・YAML と DB の不整合診断 |
+| `calsync appserver` | デスクトップアプリ用ローカル API サーバー起動(127.0.0.1 限定・起動ごとのワンタイム Bearer トークン)。通常は Tauri アプリがサイドカーとして自動起動するため、直接実行する場面は基本ない |
 | `calsync auth add <id> [--port N] [--device-code]` | OAuth フロー(ホスト実行推奨。--device-code は Microsoft のみ) |
 | `calsync auth list` | トークン状態一覧 |
 | `calsync accounts remove <id> [--force]` | 配布済みブロッカー削除 → 受領ブロッカー削除 → ローカル状態削除 |

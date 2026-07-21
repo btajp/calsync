@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"regexp"
@@ -71,60 +72,60 @@ type DetailSyncPair struct {
 	Visibility         string
 }
 
-// rawConfig は YAML の生の形。KnownFields(true) の照合対象になるため、
+// Raw は YAML の生の形。KnownFields(true) の照合対象になるため、
 // 受理するキーはここに列挙されたものが全て。
-type rawConfig struct {
-	PollInterval      string           `yaml:"poll_interval"`
-	SyncWindow        string           `yaml:"sync_window"`
-	BlockerTitle      string           `yaml:"blocker_title"`
-	ReconcileAt       string           `yaml:"reconcile_at"`
-	DedupeSameMeeting *bool            `yaml:"dedupe_same_meeting"` // 未指定(nil)と false を区別する
-	BusyShowAs        []string         `yaml:"busy_show_as"`
-	Notifications     rawNotifications `yaml:"notifications"`
-	Providers         rawProviders     `yaml:"providers"`
-	Accounts          []rawAccount     `yaml:"accounts"`
-	DetailSync        []rawDetailSync  `yaml:"detail_sync"`
+type Raw struct {
+	PollInterval      string           `yaml:"poll_interval,omitempty" json:"poll_interval,omitempty"`
+	SyncWindow        string           `yaml:"sync_window,omitempty" json:"sync_window,omitempty"`
+	BlockerTitle      string           `yaml:"blocker_title,omitempty" json:"blocker_title,omitempty"`
+	ReconcileAt       string           `yaml:"reconcile_at,omitempty" json:"reconcile_at,omitempty"`
+	DedupeSameMeeting *bool            `yaml:"dedupe_same_meeting,omitempty" json:"dedupe_same_meeting,omitempty"` // 未指定(nil)と false を区別する
+	BusyShowAs        []string         `yaml:"busy_show_as,omitempty" json:"busy_show_as,omitempty"`
+	Notifications     RawNotifications `yaml:"notifications,omitempty" json:"notifications,omitempty"`
+	Providers         RawProviders     `yaml:"providers,omitempty" json:"providers,omitempty"`
+	Accounts          []RawAccount     `yaml:"accounts,omitempty" json:"accounts,omitempty"`
+	DetailSync        []RawDetailSync  `yaml:"detail_sync,omitempty" json:"detail_sync,omitempty"`
 }
 
-type rawNotifications struct {
-	Slack *rawSlack `yaml:"slack"`
+type RawNotifications struct {
+	Slack *RawSlack `yaml:"slack,omitempty" json:"slack,omitempty"`
 }
 
-type rawSlack struct {
-	BotTokenEnv   string `yaml:"bot_token_env"`
-	Channel       string `yaml:"channel"`
-	MorningDigest string `yaml:"morning_digest"`
-	RemindBefore  string `yaml:"remind_before"`
+type RawSlack struct {
+	BotTokenEnv   string `yaml:"bot_token_env,omitempty" json:"bot_token_env,omitempty"`
+	Channel       string `yaml:"channel,omitempty" json:"channel,omitempty"`
+	MorningDigest string `yaml:"morning_digest,omitempty" json:"morning_digest,omitempty"`
+	RemindBefore  string `yaml:"remind_before,omitempty" json:"remind_before,omitempty"`
 }
 
-type rawProviders struct {
-	Google    rawGoogleProvider    `yaml:"google"`
-	Microsoft rawMicrosoftProvider `yaml:"microsoft"`
+type RawProviders struct {
+	Google    RawGoogleProvider    `yaml:"google,omitempty" json:"google,omitempty"`
+	Microsoft RawMicrosoftProvider `yaml:"microsoft,omitempty" json:"microsoft,omitempty"`
 }
 
-type rawGoogleProvider struct {
-	CredentialsFile string `yaml:"credentials_file"`
+type RawGoogleProvider struct {
+	CredentialsFile string `yaml:"credentials_file,omitempty" json:"credentials_file,omitempty"`
 }
 
-type rawMicrosoftProvider struct {
-	ClientID string `yaml:"client_id"`
+type RawMicrosoftProvider struct {
+	ClientID string `yaml:"client_id,omitempty" json:"client_id,omitempty"`
 }
 
-type rawAccount struct {
-	ID                      string   `yaml:"id"`
-	Provider                string   `yaml:"provider"`
-	Email                   string   `yaml:"email"`
-	Calendars               []string `yaml:"calendars"`
-	DigestCalendars         []string `yaml:"digest_calendars"`
-	BlockerCalendar         string   `yaml:"blocker_calendar"`
-	ShowOriginInDescription bool     `yaml:"show_origin_in_description"`
+type RawAccount struct {
+	ID                      string   `yaml:"id,omitempty" json:"id,omitempty"`
+	Provider                string   `yaml:"provider,omitempty" json:"provider,omitempty"`
+	Email                   string   `yaml:"email,omitempty" json:"email,omitempty"`
+	Calendars               []string `yaml:"calendars,omitempty" json:"calendars,omitempty"`
+	DigestCalendars         []string `yaml:"digest_calendars,omitempty" json:"digest_calendars,omitempty"`
+	BlockerCalendar         string   `yaml:"blocker_calendar,omitempty" json:"blocker_calendar,omitempty"`
+	ShowOriginInDescription *bool    `yaml:"show_origin_in_description,omitempty" json:"show_origin_in_description,omitempty"` // 未指定(nil)と false を区別する(SaveConfig の書き戻しで明示 false を保つため)
 }
 
-type rawDetailSync struct {
-	From       string   `yaml:"from"`
-	To         string   `yaml:"to"`
-	Fields     []string `yaml:"fields"`
-	Visibility string   `yaml:"visibility"`
+type RawDetailSync struct {
+	From       string   `yaml:"from,omitempty" json:"from,omitempty"`
+	To         string   `yaml:"to,omitempty" json:"to,omitempty"`
+	Fields     []string `yaml:"fields,omitempty" json:"fields,omitempty"`
+	Visibility string   `yaml:"visibility,omitempty" json:"visibility,omitempty"`
 }
 
 var syncWindowRe = regexp.MustCompile(`^([0-9]+)(mo|d)$`)
@@ -142,17 +143,21 @@ var validShowAs = map[string]bool{
 
 // Load は YAML 設定を読み込み、検証とデフォルト補完を行う。
 func Load(path string) (*Config, error) {
-	f, err := os.Open(path)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	defer f.Close()
+	return Parse(b, path)
+}
 
-	var raw rawConfig
-	dec := yaml.NewDecoder(f)
+// Parse は YAML バイト列を検証・デフォルト補完して Config にする。
+// source はエラーメッセージに使う表示名(ファイルパス等)。
+func Parse(data []byte, source string) (*Config, error) {
+	var raw Raw
+	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true) // 未知キーはエラー(タイポの黙殺を防ぐ)
 	if err := dec.Decode(&raw); err != nil {
-		return nil, fmt.Errorf("config: parse %s: %w", path, err)
+		return nil, fmt.Errorf("config: parse %s: %w", source, err)
 	}
 
 	cfg := &Config{
@@ -245,13 +250,15 @@ func Load(path string) (*Config, error) {
 	seen := make(map[string]bool, len(raw.Accounts))
 	for i, ra := range raw.Accounts {
 		a := Account{
-			ID:                      ra.ID,
-			Provider:                ra.Provider,
-			Email:                   ra.Email,
-			Calendars:               ra.Calendars,
-			DigestCalendars:         ra.DigestCalendars,
-			BlockerCalendar:         ra.BlockerCalendar,
-			ShowOriginInDescription: ra.ShowOriginInDescription,
+			ID:              ra.ID,
+			Provider:        ra.Provider,
+			Email:           ra.Email,
+			Calendars:       ra.Calendars,
+			DigestCalendars: ra.DigestCalendars,
+			BlockerCalendar: ra.BlockerCalendar,
+		}
+		if ra.ShowOriginInDescription != nil {
+			a.ShowOriginInDescription = *ra.ShowOriginInDescription
 		}
 		if a.ID == "" {
 			return nil, fmt.Errorf("config: accounts[%d]: id is required", i)
