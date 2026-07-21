@@ -20,6 +20,14 @@ import (
 	"github.com/btajp/calsync/internal/provider"
 )
 
+// CalendarListEntry はカレンダーリストの項目。
+type CalendarListEntry struct {
+	ID         string `json:"id"`
+	Summary    string `json:"summary"`
+	Primary    bool   `json:"primary"`
+	AccessRole string `json:"access_role"`
+}
+
 // maxRetries は 403/429(usageLimits 系)に対する再試行回数の上限(仕様書10章)。
 const maxRetries = 5
 
@@ -153,4 +161,28 @@ func isRateLimited(err error) bool {
 		}
 	}
 	return false
+}
+
+// ListCalendars はアカウントの CalendarList 全件を返す(デスクトップアプリの
+// カレンダー選択 UI 用)。要スコープ calendar.calendarlist.readonly。
+func (c *Client) ListCalendars(ctx context.Context) ([]CalendarListEntry, error) {
+	svc, err := c.service(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []CalendarListEntry
+	call := svc.CalendarList.List().MaxResults(250)
+	for {
+		res, err := call.Context(ctx).Do()
+		if err != nil {
+			return nil, fmt.Errorf("google calendar list (%s): %w", c.accountID, err)
+		}
+		for _, it := range res.Items {
+			out = append(out, CalendarListEntry{ID: it.Id, Summary: it.Summary, Primary: it.Primary, AccessRole: it.AccessRole})
+		}
+		if res.NextPageToken == "" {
+			return out, nil
+		}
+		call = svc.CalendarList.List().MaxResults(250).PageToken(res.NextPageToken)
+	}
 }
