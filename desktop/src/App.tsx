@@ -94,6 +94,9 @@ function Shell({ api, onResetDataDir }: { api: ApiClient; onResetDataDir: () => 
     return (
       <main className="setup">
         <h1>calsync</h1>
+        {/* エラー時でも自動更新には到達できるようにする(0.1.0 でここが不具合で
+            行き止まりになり、修正版を配れなかった教訓) */}
+        <UpdateBanner />
         <p className="error">状態確認に失敗しました: {modeCheckError}</p>
         <button onClick={checkMode}>再試行</button>
       </main>
@@ -104,6 +107,7 @@ function Shell({ api, onResetDataDir }: { api: ApiClient; onResetDataDir: () => 
     return (
       <main className="setup">
         <h1>calsync</h1>
+        <UpdateBanner />
         <p>
           コンテナ運用が検出されました。ホスト側アプリからの閲覧・変更はできません。
         </p>
