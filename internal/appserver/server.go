@@ -22,10 +22,12 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/btajp/calsync/internal/auth"
+	"github.com/btajp/calsync/internal/config"
+	"github.com/btajp/calsync/internal/doctor"
+	"github.com/btajp/calsync/internal/provider/google"
 )
 
-// Server は appserver の状態と依存を保持する。ListCals / Probe は後続タスクで
-// 追加される。
+// Server は appserver の状態と依存を保持する。
 type Server struct {
 	ConfigPath string
 	DataDir    string
@@ -40,7 +42,14 @@ type Server struct {
 	// RunFlow は OAuth 認可フロー本体(既定 auth.RunLoopbackFlow)。テストは
 	// フェイクを注入してブラウザ操作なしに検証する。
 	RunFlow func(ctx context.Context, ocfg *oauth2.Config, port int) (*oauth2.Token, error)
-	authSt  authState
+	// ListCals は GET /api/accounts/{id}/calendars の実体(既定
+	// defaultListCals = clients.BuildGoogleClient → ListCalendars)。テストは
+	// フェイクを注入して実 API 呼び出しなしに検証する。
+	ListCals func(ctx context.Context, cfg *config.Config, acct config.Account, dataDir string) ([]google.CalendarListEntry, error)
+	// Probe は GET /api/doctor の API 疎通確認(既定は nil。handleDoctor が
+	// cmd_doctor.go と同じ実装を都度組み立てる)。テストはフェイクを注入する。
+	Probe  doctor.Probe
+	authSt authState
 }
 
 // New は既定の依存(実 exec ベースの Runner・os.Getuid・既定 plist パス)で
@@ -56,6 +65,7 @@ func New(configPath, dataDir, token string) *Server {
 		PlistPath:  filepath.Join(home, "Library", "LaunchAgents", "com.btajp.calsync.plist"),
 		LookPath:   exec.LookPath,
 		RunFlow:    auth.RunLoopbackFlow,
+		ListCals:   defaultListCals,
 		authSt:     authState{phase: "idle"},
 	}
 }
@@ -70,6 +80,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/start", s.handleAuthStart)
 	mux.HandleFunc("GET /api/auth/state", s.handleAuthState)
 	mux.HandleFunc("POST /api/auth/cancel", s.handleAuthCancel)
+	mux.HandleFunc("GET /api/accounts/{id}/calendars", s.handleCalendars)
+	mux.HandleFunc("GET /api/doctor", s.handleDoctor)
 	return s.requireToken(mux)
 }
 
