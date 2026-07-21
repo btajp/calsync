@@ -6,7 +6,7 @@
 
 ## 1. 目的と方針
 
-デスクトップアプリの macOS 配布物(dmg)を Developer ID 署名+Notary Service 公証付きで GitHub Releases に公開できるようにする。方式は同組織の solo-eikaiwa で実運用済みのパイプラインの簡略版を移植する。
+デスクトップアプリの macOS 配布物(dmg)を Developer ID 署名+Notary Service 公証付きで GitHub Releases に公開できるようにする。方式は同組織の別プロダクトで実運用済みのリリースパイプラインの簡略版を移植する。
 
 | 項目 | 方針 |
 | --- | --- |
@@ -18,7 +18,7 @@
 
 ## 2. 流用する資産(新規作成ゼロ)
 
-署名・公証の資格情報はアプリ単位ではなくチーム/マシン単位のため、solo-eikaiwa で構築済みのものをそのまま使う:
+署名・公証の資格情報はアプリ単位ではなくチーム/マシン単位のため、同組織の別プロダクトで構築済みのものをそのまま使う:
 
 - Developer ID Application 証明書(キーチェーン。`security find-identity -v -p codesigning` で確認)
 - 公証用 App Store Connect API キー(Key ID / Issuer ID / `~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8`)
@@ -40,7 +40,7 @@ Store 用 App ID・provisioning は使わない。bundle identifier は既存の
 
 **鍵の継続性**: 秘密鍵を失うと、既存インストール済みアプリへ新しい更新を配信する手段がなくなる(pubkey が変わると `tauri.conf.json` を書き換えた新バージョンを手動配布するしかなく、self-update の連鎖が切れる)。秘密鍵はバックアップを取り、公開鍵のローテーションは行わない。
 
-**latest.json**: `scripts/release-desktop.sh` が生成し、GitHub Release のアセットに含める(solo-eikaiwa と同形式)。
+**latest.json**: `scripts/release-desktop.sh` が生成し、GitHub Release のアセットに含める(同組織の別プロダクトと同形式)。
 
 ```json
 {
@@ -112,14 +112,14 @@ xcrun stapler validate <app> && xcrun stapler validate <dmg>
 
 ## 7. リスクと実測項目
 
-- **tauri#11992(externalBin 同梱時の公証失敗報告)**: calsync の Go サイドカーは `externalBin` 宣言なので bundler の署名対象に入る想定だが、初回リリースで実測する。失敗した場合の回避策(solo-eikaiwa の whisper-bin と同じプレ署名: ビルド前に `codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" desktop/src-tauri/binaries/calsync-*`)をランブックに記載しておく
-- 公証には Apple Developer Program($99/年)の有効な membership が必要(solo-eikaiwa で契約済みの前提)
+- **tauri#11992(externalBin 同梱時の公証失敗報告)**: calsync の Go サイドカーは `externalBin` 宣言なので bundler の署名対象に入る想定だが、初回リリースで実測する。失敗した場合の回避策(同組織の別プロダクトで実績のあるプレ署名: ビルド前に `codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" desktop/src-tauri/binaries/calsync-*`)をランブックに記載しておく
+- 公証には Apple Developer Program($99/年)の有効な membership が必要(同組織で契約済みの前提)
 - **self-updater の E2E は未実測**: `tauri-plugin-updater` の `check()` / `downloadAndInstall()` / `relaunch()` の一連の流れは、実際に旧バージョンの `.app` から新バージョンへ更新できることを次回リリースで確認する
 - 本設計は v1 スペックの「署名・公証・配布はスコープ外」を上書きする追補。デスクトップアプリ v1 スペック §15 の公証スパイク項目は初回リリース実測で消し込む
 
 ## 8. スコープ外
 
 - CI での自動リリース(ローカル実行のみ)
-- SBOM・provenance・第三者 NOTICE(solo-eikaiwa 相当の重装備は必要になったら)
+- SBOM・provenance・第三者 NOTICE(同組織の別プロダクト相当の重装備は必要になったら)
 - Intel(x86_64)・universal ビルド(Apple Silicon のみ)
 - Windows / Linux 版の updater(macOS のみ配布のため対象外)

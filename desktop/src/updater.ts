@@ -29,6 +29,16 @@ export function createUpdaterApi(): UpdaterApi {
   let pending: Update | null = null;
   return {
     async check() {
+      if (pending) {
+        // 前回の check() が確保した Rust 側リソースを解放する。close() は Promise を返す
+        // (失敗しうる)ため await した上で、失敗しても新しい check() の続行は妨げない。
+        try {
+          await pending.close();
+        } catch {
+          // 握りつぶす(上記コメント参照)
+        }
+        pending = null;
+      }
       const update = await check();
       pending = update;
       if (!update) return null;

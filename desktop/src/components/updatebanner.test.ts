@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   bannerReducer,
   initialBannerState,
+  progressPercent,
   runCheck,
   runDownloadAndInstall,
   type BannerAction,
@@ -35,9 +36,9 @@ describe("bannerReducer", () => {
     expect(state).toEqual({ phase: "idle" });
   });
 
-  it("check-failed(silent: false) は error へ遷移する(手動確認の失敗)", () => {
+  it("check-failed(silent: false) は kind: check の error へ遷移する(手動確認の失敗)", () => {
     const state = bannerReducer({ phase: "checking" }, { type: "check-failed", message: "offline", silent: false });
-    expect(state).toEqual({ phase: "error", message: "offline" });
+    expect(state).toEqual({ phase: "error", kind: "check", message: "offline" });
   });
 
   it("download-started は available から downloading へ遷移し、進捗を0で初期化する", () => {
@@ -63,12 +64,45 @@ describe("bannerReducer", () => {
     expect(state).toEqual(initialBannerState);
   });
 
-  it("download-failed は error へ遷移する", () => {
+  it("download-failed は kind: download の error へ遷移する", () => {
     const downloading = { phase: "downloading" as const, info, progress: { downloaded: 0, contentLength: null } };
     expect(bannerReducer(downloading, { type: "download-failed", message: "network error" })).toEqual({
       phase: "error",
+      kind: "download",
       message: "network error",
     });
+  });
+
+  it("check の error と download の error は kind で区別できる(署名検証エラーの誤誘導防止)", () => {
+    const checkError = bannerReducer({ phase: "checking" }, { type: "check-failed", message: "x", silent: false });
+    const downloadError = bannerReducer(
+      { phase: "downloading", info, progress: { downloaded: 0, contentLength: null } },
+      { type: "download-failed", message: "x" },
+    );
+    expect(checkError).toMatchObject({ kind: "check" });
+    expect(downloadError).toMatchObject({ kind: "download" });
+  });
+});
+
+describe("progressPercent", () => {
+  it("contentLength が取れていれば % 文字列を返す", () => {
+    expect(progressPercent({ downloaded: 50, contentLength: 100 })).toBe("50%");
+  });
+
+  it("contentLength が 0 なら null(% を出さない)", () => {
+    expect(progressPercent({ downloaded: 0, contentLength: 0 })).toBeNull();
+  });
+
+  it("contentLength が null(未取得)なら null", () => {
+    expect(progressPercent({ downloaded: 10, contentLength: null })).toBeNull();
+  });
+
+  it("downloaded が contentLength を超えても 100% にクランプする", () => {
+    expect(progressPercent({ downloaded: 150, contentLength: 100 })).toBe("100%");
+  });
+
+  it("端数は切り捨てる", () => {
+    expect(progressPercent({ downloaded: 1, contentLength: 3 })).toBe("33%");
   });
 });
 

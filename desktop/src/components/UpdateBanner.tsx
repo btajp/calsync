@@ -8,7 +8,7 @@ export type BannerState =
   | { phase: "up-to-date" }
   | { phase: "available"; info: UpdateInfo }
   | { phase: "downloading"; info: UpdateInfo; progress: DownloadProgress }
-  | { phase: "error"; message: string };
+  | { phase: "error"; kind: "check" | "download"; message: string };
 
 export type BannerAction =
   | { type: "check-started" }
@@ -28,13 +28,13 @@ export function bannerReducer(state: BannerState, action: BannerAction): BannerS
     case "check-succeeded":
       return action.info ? { phase: "available", info: action.info } : { phase: "up-to-date" };
     case "check-failed":
-      return action.silent ? { phase: "idle" } : { phase: "error", message: action.message };
+      return action.silent ? { phase: "idle" } : { phase: "error", kind: "check", message: action.message };
     case "download-started":
       return { phase: "downloading", info: action.info, progress: { downloaded: 0, contentLength: null } };
     case "download-progress":
       return state.phase === "downloading" ? { ...state, progress: action.progress } : state;
     case "download-failed":
-      return { phase: "error", message: action.message };
+      return { phase: "error", kind: "download", message: action.message };
     default:
       return state;
   }
@@ -70,10 +70,16 @@ export async function runDownloadAndInstall(
   }
 }
 
-function progressPercent(progress: DownloadProgress): string | null {
+/** ダウンロード進捗を % 表示に変換する。contentLength が不明・0 以下なら null(% は出さない)。 */
+export function progressPercent(progress: DownloadProgress): string | null {
   if (!progress.contentLength || progress.contentLength <= 0) return null;
   return `${Math.min(100, Math.floor((progress.downloaded / progress.contentLength) * 100))}%`;
 }
+
+const ERROR_MESSAGES: Record<"check" | "download", string> = {
+  check: "更新の確認に失敗しました",
+  download: "更新のダウンロードまたは適用に失敗しました",
+};
 
 export default function UpdateBanner({ api = updaterApi }: { api?: UpdaterApi }) {
   const [state, dispatch] = useReducer(bannerReducer, initialBannerState);
@@ -92,7 +98,11 @@ export default function UpdateBanner({ api = updaterApi }: { api?: UpdaterApi })
         更新確認
       </button>
       {state.phase === "up-to-date" && <span className="hint">最新です</span>}
-      {state.phase === "error" && <span className="hint error">確認に失敗しました: {state.message}</span>}
+      {state.phase === "error" && (
+        <span className="hint error">
+          {ERROR_MESSAGES[state.kind]}: {state.message}
+        </span>
+      )}
       {(state.phase === "available" || state.phase === "downloading") && (
         <span className="hint">v{state.info.version} が利用可能</span>
       )}
