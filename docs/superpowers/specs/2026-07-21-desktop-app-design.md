@@ -202,4 +202,4 @@ flowchart TD
 - [ ] Cmd+Q・クラッシュ時のサイドカー kill が漏れないこと(アクティビティモニタで確認)
 - [ ] stdin EOF による appserver の孤児検知が Tauri の spawn 実装で機能すること
 - [ ] launchctl print による LaunchAgent 検出の網羅性(login 前後・Rosetta 有無)
-- [ ] (配布する場合)サイドカー同梱時の公証(tauri#11992 の再現有無)
+- [x] (配布する場合)サイドカー同梱時の公証(tauri#11992 の再現有無)— 2026-07-21 の desktop-v0.1.0 リリースで実測: bundler が externalBin を正しく署名し、.app / dmg とも Notary Service が Accepted。プレ署名回避策は不要だった
