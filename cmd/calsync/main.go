@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"sort"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -12,6 +11,7 @@ import (
 	"github.com/btajp/calsync/internal/auth"
 	"github.com/btajp/calsync/internal/clients"
 	"github.com/btajp/calsync/internal/config"
+	"github.com/btajp/calsync/internal/doctor"
 	"github.com/btajp/calsync/internal/engine"
 	"github.com/btajp/calsync/internal/provider"
 	"github.com/btajp/calsync/internal/store"
@@ -71,21 +71,7 @@ func buildEngine(cfg *config.Config, dataDir string) (*engine.Engine, error) {
 	return &engine.Engine{Store: st, Providers: providers, Cfg: cfg, Now: time.Now}, nil
 }
 
-// findOrphanAccounts は DB に行があるのに設定に存在しないアカウント ID を
-// 重複除去・昇順ソートして返す純関数(doctor の孤児警告用。仕様 11 章)。
+// findOrphanAccounts は doctor.FindOrphanAccounts への委譲ラッパー。
 func findOrphanAccounts(cfgIDs, dbIDs []string) []string {
-	known := make(map[string]bool, len(cfgIDs))
-	for _, id := range cfgIDs {
-		known[id] = true
-	}
-	seen := make(map[string]bool, len(dbIDs))
-	var orphans []string
-	for _, id := range dbIDs {
-		if !known[id] && !seen[id] {
-			seen[id] = true
-			orphans = append(orphans, id)
-		}
-	}
-	sort.Strings(orphans)
-	return orphans
+	return doctor.FindOrphanAccounts(cfgIDs, dbIDs)
 }
