@@ -54,6 +54,7 @@ func New(configPath, dataDir, token string) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", s.handleStatus)
+	mux.HandleFunc("POST /api/daemon/{action}", s.handleDaemonAction)
 	return s.requireToken(mux)
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -60,4 +61,34 @@ func (s *Server) detectDaemon(ctx context.Context) DaemonInfo {
 		}
 	}
 	return DaemonInfo{Mode: "manual", Running: false}
+}
+
+// handleDaemonAction は POST /api/daemon/{start|stop|restart} を処理する。
+// launchd モード外は 409 を返す。成功時は {"ok":true} を返す。
+func (s *Server) handleDaemonAction(w http.ResponseWriter, r *http.Request) {
+	info := s.detectDaemon(r.Context())
+	if info.Mode != "launchd" {
+		writeErr(w, http.StatusConflict, "not_launchd",
+			"daemon is not managed by launchd on this host",
+			"launchd管理外です。./scripts/macos/install-launchd.sh でのセットアップ、または手動での操作を行ってください")
+		return
+	}
+	target := fmt.Sprintf("gui/%d/%s", s.UID, launchdLabel)
+	var args []string
+	switch r.PathValue("action") {
+	case "start":
+		args = []string{"bootstrap", fmt.Sprintf("gui/%d", s.UID), s.PlistPath}
+	case "stop":
+		args = []string{"bootout", target}
+	case "restart":
+		args = []string{"kickstart", "-k", target}
+	default:
+		writeErr(w, http.StatusNotFound, "unknown_action", "unknown daemon action", "")
+		return
+	}
+	if _, stderr, err := s.Runner.Run(r.Context(), "launchctl", args...); err != nil {
+		writeErr(w, http.StatusBadGateway, "launchctl_failed", strings.TrimSpace(stderr), "launchctl の失敗です。ログを確認してください")
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
 }
