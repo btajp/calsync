@@ -57,8 +57,14 @@ type Server struct {
 	// s.defaultCollectEvents を都度組み立てる)。テストはフェイクを注入して
 	// 読み取り専用プロバイダ・実 SQLite なしに検証する。
 	CollectEvents func(ctx context.Context, w model.Window) ([]engine.DigestEntry, []string, error)
+	// RunReconcile は POST /api/maintenance/reconcile が bootout 後に実行する
+	// reconcile サブプロセスの実体(既定は nil。runMaintenanceWindow が
+	// s.defaultRunReconcile を都度組み立てる)。テストはフェイクを注入して
+	// 実バイナリの起動・実 launchctl なしに検証する。
+	RunReconcile func(ctx context.Context, logPath string) error
 
 	authSt        authState
+	maintSt       maintenanceState
 	eventsCacheMu sync.Mutex
 	eventsCache   map[eventsCacheKey]eventsCacheEntry
 }
@@ -78,6 +84,7 @@ func New(configPath, dataDir, token string) *Server {
 		RunFlow:    auth.RunLoopbackFlow,
 		ListCals:   defaultListCals,
 		authSt:     authState{phase: "idle"},
+		maintSt:    maintenanceState{phase: "idle"},
 	}
 }
 
@@ -94,6 +101,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/accounts/{id}/calendars", s.handleCalendars)
 	mux.HandleFunc("GET /api/doctor", s.handleDoctor)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
+	mux.HandleFunc("POST /api/maintenance/reconcile", s.handleMaintenanceReconcile)
+	mux.HandleFunc("GET /api/maintenance/state", s.handleMaintenanceState)
 	return s.withCORS(s.requireToken(mux))
 }
 
