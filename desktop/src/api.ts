@@ -1,4 +1,11 @@
-import type { AuthState, CalendarListEntry, EventsResponse, RawConfig, StatusResponse } from "./types";
+import type {
+  AuthState,
+  CalendarListEntry,
+  EventsResponse,
+  MaintenanceState,
+  RawConfig,
+  StatusResponse,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -68,4 +75,8 @@ export class ApiClient {
     if (refresh) q.set("refresh", "1");
     return this.req<EventsResponse>("GET", `/api/events?${q.toString()}`);
   }
+  // 202 Accepted で非同期実行が始まる。進捗は maintenanceState() をポーリングする
+  // (デスクトップ設計 2026-07-23 §4)。
+  maintenanceReconcile() { return this.req<{ ok: boolean }>("POST", "/api/maintenance/reconcile"); }
+  maintenanceState() { return this.req<MaintenanceState>("GET", "/api/maintenance/state"); }
 }

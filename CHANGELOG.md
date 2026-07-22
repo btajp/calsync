@@ -6,8 +6,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **デスクトップアプリ: カレンダータブに「スケジュール」ビュー(FullCalendar list plugin)を追加**。週/月に加え、リスト表示(`listWeek`)へ切り替えられる。データ取得・色分け・イベントクリックは既存の週/月ビューと完全共有
+- **appserver + デスクトップアプリ: アプリからフルリコンサイルを実行できる「リコンサイル実行」機能を追加**(launchd 管理下限定)。`POST /api/maintenance/reconcile` が稼働中デーモンを一時停止(`launchctl bootout`)→ `calsync reconcile` をサブプロセス実行(stdout/stderr を `<data>/reconcile-<UTC時刻>.log` へ保存)→ 成否に関わらず再開(`launchctl bootstrap`)を非同期で行い、`GET /api/maintenance/state` でポーリングする。フロントはダッシュボードの「リコンサイル実行」ボタン、アカウント追加ウィザード完了画面の「リコンサイルを実行」ボタンから起動でき(確認ダイアログあり)、実行中は全タブ共通バナーで保存・デーモン操作・再実行を無効化する(appserver がデーモンを bootout する副作用で `/api/status` の `daemon.running` がクラッシュ時と区別できなくなるため、maintenance state を daemon 状態より優先して「メンテナンス中」を表示)
+
 ### Fixed
 
+- **デスクトップアプリ: 積み残しの frontend hardening を一括対応(F8〜F13)**: ダッシュボードの初回 `getConfig` 失敗時に再試行ボタンを表示するよう変更(成功時はエラー表示が残らない) / `ConfigForm.normalizeRaw` の `providers` 枝を他の枝(account/detail_sync)と同じ spread-then-override に統一し、型定義に無い将来フィールドも保持するように / `sidecar.ts` は handshake タイムアウト後に `cmd.spawn()` が遅れて解決した場合、その child を直ちに kill して孤児プロセスを残さないように / `sidecar.ts` に module スコープの起動中 Promise ガードを追加し、dev の React StrictMode 二重 effect 実行で sidecar が二重 spawn される不具合を修正 / データディレクトリ選択後、サイドカー起動直後の `GET /api/config` が `config_read` で失敗した場合(典型は `calsync.yaml` 不在)に「data ディレクトリを選んでいますか?」の警告(選び直す/このまま使う)を表示するように / アカウント追加ウィザードの認可キャンセル(`authCancel`)が HTTP 呼び出し自体で失敗した場合にエラー行を表示するように(従来は `authPhase` が変わらず表示されなかった)
 - **appserver: 積み残しの防御的ハードニングを一括対応(F1〜F7)**: `internal/provider/google` の `ListCalendars` エラーを同ファイルの他メソッドと同じプレフィックス慣習(`google[%s]: ...`)に統一 / `Serve` は `Token` が空だと `subtle.ConstantTimeCompare` の比較が空同士で一致してしまい認証が事実上素通しになるため、起動時に拒否するよう変更 / `POST /api/daemon/{action}` は launchctl 失敗時に stderr が空ならエラーメッセージが空文字列になっていた問題を修正(`err.Error()` にフォールバック) / `POST /api/auth/start` は `account_id` を `auth.ValidateAccountID`(内部の `validateAccountID` を公開化)で事前検証し、不正な id をブラウザ往復後ではなく開始直後の 400 で弾くように / `GET /api/config` の読み取りを Stat→ReadFile→Stat の mtime 一致確認に変更し TOCTOU(読み取り中の外部書き換え)を縮小(不一致なら 1 回だけ再読み込み、それでも不一致なら 500) / `GET /api/events` のメモリキャッシュに、書き込みのたびに期限切れエントリを掃除する処理を追加(ビュー切替の連打でキーが際限なく積み上がるのを防止) / yamledit の `mergeComments` を修正: フロー記法(`digest_calendars: [a] # comment`)の行末コメントがブロック形式への書き戻し時にコレクション値ノードの `LineComment` として保持され続け、エンコーダが描画位置を持てず隣接する新規キー(`show_origin_in_description` 等)の行へ誤って移動する不具合を修正(実機で観測)
 
 ## [0.2.1] - 2026-07-22

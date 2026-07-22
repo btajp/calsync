@@ -1,16 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ApiClient } from "./api";
+import { ApiClient, ApiError } from "./api";
 import { startSidecar } from "./sidecar";
+import type { SidecarHandle } from "./sidecar";
+import { useMaintenance } from "./maintenance";
 import Dashboard from "./pages/Dashboard";
 import ConfigForm from "./pages/ConfigForm";
 import AccountAdd from "./pages/AccountAdd";
 import CalendarView from "./pages/CalendarView";
 import UpdateBanner from "./components/UpdateBanner";
+import MaintenanceBanner from "./components/MaintenanceBanner";
 
 export default function App() {
   const [api, setApi] = useState<ApiClient | null>(null);
+  // F12: フォルダ選択直後、サイドカー起動(handshake)自体は calsync.yaml の有無に関わらず成功する
+  // (appserver はリスナー起動時点で handshake を出し、設定ファイルは各 API 呼び出し時に読む)ため、
+  // 「間違って親フォルダ等を選んだ」ケースをここで検出できない。起動直後に 1 回 GET /api/config を
+  // 叩き、config_read(Stat/ReadFile 失敗。典型はファイル不在)のときだけ警告する。YAML パース
+  // エラー等の別種の失敗はここでは判定せず通常フロー(各ページの読み込みエラー表示)に委ねる。
+  const [configWarning, setConfigWarning] = useState<SidecarHandle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dataDir, setDataDir] = useState<string | null>(localStorage.getItem("calsync.dataDir"));
   const [retry, setRetry] = useState(0); // 起動エラー画面の再試行で effect を再発火させる
@@ -18,15 +27,36 @@ export default function App() {
   useEffect(() => {
     if (!dataDir) return;
     let kill: (() => void) | undefined;
+    let cancelled = false;
     startSidecar(dataDir)
-      .then((s) => {
-        setApi(s.api);
+      .then(async (s) => {
         kill = s.kill;
         void getCurrentWindow().onCloseRequested(() => s.kill());
+        try {
+          await s.api.getConfig();
+          if (!cancelled) setApi(s.api);
+        } catch (e) {
+          if (cancelled) return;
+          if (e instanceof ApiError && e.code === "config_read") {
+            setConfigWarning({ api: s.api, kill: s.kill });
+          } else {
+            // calsync.yaml 不在以外の失敗(YAML 破損等)は通常フローに委ね、各ページのエラー
+            // 表示・再試行導線(F8 等)に任せる。
+            setApi(s.api);
+          }
+        }
       })
-      .catch((e) => setError(String(e)));
-    return () => kill?.();
+      .catch((e) => { if (!cancelled) setError(String(e)); });
+    return () => { cancelled = true; kill?.(); };
   }, [dataDir, retry]);
+
+  const resetDataDir = useCallback(() => {
+    localStorage.removeItem("calsync.dataDir");
+    setError(null);
+    setConfigWarning(null);
+    setApi(null);
+    setDataDir(null);
+  }, []);
 
   if (!dataDir) {
     return (
@@ -57,15 +87,38 @@ export default function App() {
           <button onClick={() => { setError(null); setRetry((r) => r + 1); }}>
             再試行
           </button>
-          <button className="link-button" onClick={() => { localStorage.removeItem("calsync.dataDir"); setError(null); setDataDir(null); }}>
+          <button className="link-button" onClick={resetDataDir}>
             データフォルダ変更
           </button>
         </div>
       </main>
     );
   }
+  if (configWarning) {
+    return (
+      <main className="setup">
+        <h1>calsync</h1>
+        <UpdateBanner />
+        <p className="error">
+          選択したフォルダに calsync.yaml がありません。data ディレクトリを選んでいますか?
+        </p>
+        <div className="button-row">
+          <button onClick={resetDataDir}>選び直す</button>
+          <button
+            className="link-button"
+            onClick={() => {
+              setApi(configWarning.api);
+              setConfigWarning(null);
+            }}
+          >
+            このまま使う
+          </button>
+        </div>
+      </main>
+    );
+  }
   if (!api) return <main>appserver に接続中…</main>;
-  return <Shell api={api} onResetDataDir={() => { localStorage.removeItem("calsync.dataDir"); setDataDir(null); }} />;
+  return <Shell api={api} onResetDataDir={resetDataDir} />;
 }
 
 type Tab = "dashboard" | "calendar" | "config" | "account-add";
@@ -88,6 +141,10 @@ function Shell({ api, onResetDataDir }: { api: ApiClient; onResetDataDir: () => 
   const [tab, setTab] = useState<Tab>("dashboard");
   const [modeCheck, setModeCheck] = useState<ModeCheck>("checking");
   const [modeCheckError, setModeCheckError] = useState<string | null>(null);
+  // maintenance state は App(Shell)レベルで一元管理し、各タブへ props で配る
+  // (デスクトップ設計 2026-07-23 §4)。フックは早期 return より前で無条件に呼ぶ必要があるため
+  // ここで生成する(container/error 分岐でも呼ばれるが、ポーリングは running 判明時のみ)。
+  const maintenance = useMaintenance(api);
 
   const checkMode = useCallback(() => {
     setModeCheck("checking");
@@ -169,11 +226,16 @@ function Shell({ api, onResetDataDir }: { api: ApiClient; onResetDataDir: () => 
       </header>
 
       <UpdateBanner />
+      <MaintenanceBanner state={maintenance.state} />
 
-      {tab === "dashboard" && <Dashboard api={api} />}
+      {tab === "dashboard" && <Dashboard api={api} maintenance={maintenance} />}
       {tab === "calendar" && <CalendarView api={api} />}
-      {tab === "config" && <ConfigForm api={api} onGoToAccountAdd={() => setTab("account-add")} />}
-      {tab === "account-add" && <AccountAdd api={api} onGoToDashboard={() => setTab("dashboard")} />}
+      {tab === "config" && (
+        <ConfigForm api={api} maintenance={maintenance} onGoToAccountAdd={() => setTab("account-add")} />
+      )}
+      {tab === "account-add" && (
+        <AccountAdd api={api} maintenance={maintenance} onGoToDashboard={() => setTab("dashboard")} />
+      )}
     </main>
   );
 }

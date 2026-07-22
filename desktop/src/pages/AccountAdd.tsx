@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ApiClient } from "../api";
 import { ApiError } from "../api";
+import type { UseMaintenanceResult } from "../maintenance";
 import type { CalendarListEntry, RawAccount, RawConfig } from "../types";
 
 const ACCOUNT_ID_RE = /^[A-Za-z0-9._-]+$/;
@@ -82,7 +83,15 @@ function buildNewAccount(input: {
   return account;
 }
 
-export default function AccountAdd({ api, onGoToDashboard }: { api: ApiClient; onGoToDashboard?: () => void }) {
+export default function AccountAdd({
+  api,
+  maintenance,
+  onGoToDashboard,
+}: {
+  api: ApiClient;
+  maintenance: UseMaintenanceResult;
+  onGoToDashboard?: () => void;
+}) {
   const [step, setStep] = useState<Step>({ kind: "loading" });
   const [existingIds, setExistingIds] = useState<string[]>([]);
   const [hasGoogle, setHasGoogle] = useState(false);
@@ -99,6 +108,10 @@ export default function AccountAdd({ api, onGoToDashboard }: { api: ApiClient; o
   const [authError, setAuthError] = useState<string | null>(null);
   const [authHint, setAuthHint] = useState<string | undefined>(undefined);
   const [cancelling, setCancelling] = useState(false);
+  // authCancel の HTTP 呼び出し自体が失敗したときのエラー(F13)。authError/authPhase とは別に
+  // 持つ: キャンセル失敗は authPhase を変えない(まだ starting/running のまま)ため、
+  // authPhase === "error" の分岐に相乗りすると表示されず埋もれてしまう。
+  const [cancelError, setCancelError] = useState<string | null>(null);
   // 「再試行」ボタンで同じ id/provider のまま authStart をもう一度呼ぶためだけのトリガー値。
   const [authRetryToken, setAuthRetryToken] = useState(0);
   // タブ切り替え等でアンマウントされた時、進行中の認可(phase=running)が残っていれば
@@ -120,6 +133,8 @@ export default function AccountAdd({ api, onGoToDashboard }: { api: ApiClient; o
   const [pendingRestart, setPendingRestart] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [restartError, setRestartError] = useState<string | null>(null);
+  const [maintenanceTriggering, setMaintenanceTriggering] = useState(false);
+  const [maintenanceError, setMaintenanceError] = useState<string | null>(null);
 
   const loadPrecheck = () => {
     setStep({ kind: "loading" });
@@ -155,6 +170,7 @@ export default function AccountAdd({ api, onGoToDashboard }: { api: ApiClient; o
     setAuthPhase("starting");
     setAuthError(null);
     setAuthHint(undefined);
+    setCancelError(null);
     // handleAuthStart はレスポンスを返す前に phase を "running" にする(authflow.go)。
     // つまりリクエスト送出からレスポンス到達までの間に既にサーバー側は running になり得る。
     // .then() 内で立てると、その窓でアンマウントされた場合に runningFlowRef が true にならず、
@@ -239,11 +255,14 @@ export default function AccountAdd({ api, onGoToDashboard }: { api: ApiClient; o
 
   const handleCancelAuth = () => {
     setCancelling(true);
+    setCancelError(null);
     api.authCancel().catch((e) => {
       // キャンセル自体が失敗した場合、実際にはキャンセルされていないため
       // 以降のエラー表示を「キャンセルしました」に誤表示しないよう戻す。
+      // authPhase は starting/running のままなので、失敗は cancelError で
+      // 別途可視化する(F13。authError は authPhase === "error" でしか描画されない)。
       setCancelling(false);
-      setAuthError(describeError(e));
+      setCancelError(describeError(e));
     });
   };
 
@@ -303,6 +322,24 @@ export default function AccountAdd({ api, onGoToDashboard }: { api: ApiClient; o
       .then(() => setPendingRestart(false))
       .catch((e) => setRestartError(describeError(e)))
       .finally(() => setRestarting(false));
+  };
+
+  // 完了画面の「リコンサイルを実行」(デスクトップ設計 2026-07-23 §4): 確認ダイアログの上で
+  // POST /api/maintenance/reconcile を叩き、起動できたらダッシュボードへ誘導する
+  // (実際の反映には数分かかるため、進捗はダッシュボードのバナー/ポーリングで追う)。
+  // 起動自体に失敗した場合(409 等)はこの画面に留まりエラーを表示する。
+  const handleTriggerMaintenance = async () => {
+    if (!window.confirm("数分かかります。実行中は同期が一時停止します。リコンサイルを実行しますか?")) return;
+    setMaintenanceTriggering(true);
+    setMaintenanceError(null);
+    try {
+      await maintenance.trigger();
+      onGoToDashboard?.();
+    } catch (e) {
+      setMaintenanceError(describeError(e));
+    } finally {
+      setMaintenanceTriggering(false);
+    }
   };
 
   if (step.kind === "loading") {
@@ -371,6 +408,7 @@ export default function AccountAdd({ api, onGoToDashboard }: { api: ApiClient; o
               <button onClick={handleCancelAuth} disabled={authPhase === "starting"}>
                 キャンセル
               </button>
+              {cancelError && <p className="error">キャンセルに失敗しました: {cancelError}</p>}
             </>
           )}
           {authPhase === "error" && (
@@ -478,8 +516,11 @@ export default function AccountAdd({ api, onGoToDashboard }: { api: ApiClient; o
               {blockerId || "primary(既定)"}
             </p>
           )}
+          {maintenance.blocking && (
+            <p className="hint">リコンサイル実行中のため保存できません。完了までお待ちください。</p>
+          )}
           <div className="button-row">
-            <button onClick={handleSave} disabled={saving}>
+            <button onClick={handleSave} disabled={saving || maintenance.blocking}>
               {saving ? "保存中…" : conflictMessage ? "再試行" : "設定に追記する"}
             </button>
             <button className="link-button" onClick={resetToInput} disabled={saving}>
@@ -497,11 +538,26 @@ export default function AccountAdd({ api, onGoToDashboard }: { api: ApiClient; o
           <p>
             アカウント <strong>{id}</strong> を設定に追記しました。
           </p>
+          <p>既存予定の反映は深夜の自動リコンサイルで行われます。今すぐ反映することもできます。</p>
+          {daemonMode === "launchd" && (
+            <>
+              <button
+                onClick={() => void handleTriggerMaintenance()}
+                disabled={maintenance.blocking || maintenanceTriggering}
+              >
+                {maintenanceTriggering ? "実行中…" : maintenance.blocking ? "他のリコンサイルが実行中…" : "リコンサイルを実行"}
+              </button>
+              {maintenanceError && <p className="error">{maintenanceError}</p>}
+            </>
+          )}
+          {daemonMode !== null && daemonMode !== "launchd" && (
+            <p className="hint">launchd 管理外のため、この画面からリコンサイルを実行することはできません。</p>
+          )}
           {pendingRestart && (
             <>
               <p>デーモン未反映の変更があります。</p>
               {daemonMode === "launchd" && (
-                <button onClick={handleRestart} disabled={restarting}>
+                <button onClick={handleRestart} disabled={restarting || maintenance.blocking}>
                   {restarting ? "再起動中…" : "デーモンを再起動して反映"}
                 </button>
               )}

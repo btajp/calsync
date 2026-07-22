@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import FullCalendar from "@fullcalendar/react";
 import dayGridPlugin from "@fullcalendar/daygrid";
 import timeGridPlugin from "@fullcalendar/timegrid";
+import listPlugin from "@fullcalendar/list";
 import jaLocale from "@fullcalendar/core/locales/ja";
 import type { DatesSetArg, EventClickArg, EventContentArg, EventInput } from "@fullcalendar/core";
 import { open } from "@tauri-apps/plugin-shell";
@@ -249,9 +250,12 @@ export default function CalendarView({ api }: { api: ApiClient }) {
       {loading && <p className="hint">読み込み中…</p>}
       <div className="calendar-grid">
         <FullCalendar
-          plugins={[dayGridPlugin, timeGridPlugin]}
+          plugins={[dayGridPlugin, timeGridPlugin, listPlugin]}
           initialView="timeGridWeek"
-          headerToolbar={{ left: "prev,next today", center: "title", right: "timeGridWeek,dayGridMonth" }}
+          headerToolbar={{ left: "prev,next today", center: "title", right: "timeGridWeek,dayGridMonth,listWeek" }}
+          // ja ロケールの既定は list ボタンを「予定リスト」にするが、仕様(§2)により
+          // 「スケジュール」に上書きする(list 系ビューは listWeek のみ使用)。
+          buttonText={{ list: "スケジュール" }}
           locale={jaLocale}
           height="100%"
           events={fcEvents}

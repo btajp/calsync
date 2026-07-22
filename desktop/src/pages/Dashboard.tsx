@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ApiClient } from "../api";
 import { ApiError } from "../api";
+import { daemonRunningLabel } from "../maintenance";
+import type { UseMaintenanceResult } from "../maintenance";
 import type { CalendarStatus, DaemonInfo, RawConfig, StatusResponse } from "../types";
 
 export interface OverviewRow {
@@ -94,13 +96,18 @@ const DAEMON_ACTIONS: { key: DaemonAction; label: string }[] = [
   { key: "restart", label: "再起動" },
 ];
 
-export default function Dashboard({ api }: { api: ApiClient }) {
+export default function Dashboard({ api, maintenance }: { api: ApiClient; maintenance: UseMaintenanceResult }) {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [rawConfig, setRawConfig] = useState<RawConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // getConfig 専用のエラー状態(F8)。status/daemon 操作の error とは別に持ち、再試行ボタンで
+  // loadConfig をもう一度呼べるようにする(呼び出し開始時にクリアするため、成功時は
+  // catch が起きずそのまま null のままになる=「成功時のエラークリア」を満たす)。
+  const [configError, setConfigError] = useState<string | null>(null);
   const [doctorText, setDoctorText] = useState<string | null>(null);
   const [doctorRunning, setDoctorRunning] = useState(false);
   const [daemonAction, setDaemonAction] = useState<DaemonAction | null>(null);
+  const [maintenanceTriggering, setMaintenanceTriggering] = useState(false);
 
   const refreshStatus = useCallback(() => {
     api
@@ -109,13 +116,18 @@ export default function Dashboard({ api }: { api: ApiClient }) {
       .catch((e) => setError(describeError(e)));
   }, [api]);
 
-  useEffect(() => {
-    refreshStatus();
+  const loadConfig = useCallback(() => {
+    setConfigError(null);
     api
       .getConfig()
       .then((c) => setRawConfig(c.raw))
-      .catch((e) => setError(describeError(e)));
-  }, [api, refreshStatus]);
+      .catch((e) => setConfigError(describeError(e)));
+  }, [api]);
+
+  useEffect(() => {
+    refreshStatus();
+    loadConfig();
+  }, [api, refreshStatus, loadConfig]);
 
   // 5 秒ポーリング。バックグラウンドタブでは appserver への無駄な問い合わせを避ける。
   useEffect(() => {
@@ -153,6 +165,20 @@ export default function Dashboard({ api }: { api: ApiClient }) {
     }
   };
 
+  // デーモン状態カードの「リコンサイル実行」ボタン(デスクトップ設計 2026-07-23 §4)。
+  // 確認ダイアログで実行内容を明示してから POST する。
+  const runMaintenance = async () => {
+    if (!window.confirm("数分かかります。実行中は同期が一時停止します。リコンサイルを実行しますか?")) return;
+    setMaintenanceTriggering(true);
+    try {
+      await maintenance.trigger();
+    } catch {
+      // エラーは maintenance.triggerError に反映済み(DaemonCard 側で表示する)
+    } finally {
+      setMaintenanceTriggering(false);
+    }
+  };
+
   const rows = rawConfig && status ? buildOverview(rawConfig, status) : [];
 
   return (
@@ -162,7 +188,14 @@ export default function Dashboard({ api }: { api: ApiClient }) {
       <section className="card">
         <h2>デーモン状態</h2>
         {status ? (
-          <DaemonCard daemon={status.daemon} action={daemonAction} onAction={runDaemonAction} />
+          <DaemonCard
+            daemon={status.daemon}
+            action={daemonAction}
+            onAction={runDaemonAction}
+            maintenance={maintenance}
+            maintenanceTriggering={maintenanceTriggering}
+            onRunMaintenance={() => void runMaintenance()}
+          />
         ) : (
           <p>読み込み中…</p>
         )}
@@ -170,7 +203,16 @@ export default function Dashboard({ api }: { api: ApiClient }) {
 
       <section className="card">
         <h2>アカウント構成</h2>
-        {rawConfig && status ? <OverviewTable rows={rows} /> : <p>読み込み中…</p>}
+        {configError ? (
+          <div className="banner">
+            <p>設定の取得に失敗しました: {configError}</p>
+            <button onClick={loadConfig}>再試行</button>
+          </div>
+        ) : rawConfig && status ? (
+          <OverviewTable rows={rows} />
+        ) : (
+          <p>読み込み中…</p>
+        )}
       </section>
 
       <section className="card">
@@ -188,25 +230,45 @@ function DaemonCard({
   daemon,
   action,
   onAction,
+  maintenance,
+  maintenanceTriggering,
+  onRunMaintenance,
 }: {
   daemon: DaemonInfo;
   action: DaemonAction | null;
   onAction: (action: DaemonAction) => void;
+  maintenance: UseMaintenanceResult;
+  maintenanceTriggering: boolean;
+  onRunMaintenance: () => void;
 }) {
+  const blocking = maintenance.blocking;
   return (
     <div>
       <p>
-        モード: {daemon.mode} / 状態: {daemon.running ? "稼働中" : "停止中"}
+        モード: {daemon.mode} / 状態: {daemonRunningLabel(daemon.running, maintenance.state)}
       </p>
-      {daemon.detail && <p className="hint">{daemon.detail}</p>}
+      {blocking ? (
+        // メンテナンス実行中は launchctl bootout により daemon.detail が「installed but not
+        // loaded」等クラッシュ時と同じ文言になり紛らわしいため、専用の案内に差し替える
+        // (デスクトップ設計 2026-07-23 §4 の統合事実)。
+        <p className="hint">リコンサイル実行中のため一時的にデーモンが停止しています。完了すると自動的に再開します。</p>
+      ) : (
+        daemon.detail && <p className="hint">{daemon.detail}</p>
+      )}
       {daemon.mode === "launchd" && (
-        <div className="button-row">
-          {DAEMON_ACTIONS.map(({ key, label }) => (
-            <button key={key} disabled={action !== null} onClick={() => onAction(key)}>
-              {action === key ? `${label}中…` : label}
+        <>
+          <div className="button-row">
+            {DAEMON_ACTIONS.map(({ key, label }) => (
+              <button key={key} disabled={action !== null || blocking} onClick={() => onAction(key)}>
+                {action === key ? `${label}中…` : label}
+              </button>
+            ))}
+            <button onClick={onRunMaintenance} disabled={blocking || maintenanceTriggering}>
+              {maintenanceTriggering || blocking ? "リコンサイル実行中…" : "リコンサイル実行"}
             </button>
-          ))}
-        </div>
+          </div>
+          {maintenance.triggerError && <p className="error">{maintenance.triggerError}</p>}
+        </>
       )}
       {daemon.mode === "container" && (
         <p className="hint">

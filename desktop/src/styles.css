@@ -285,3 +285,8 @@ p.error {
   border-color: #b8860b;
   background: rgba(184, 134, 11, 0.1);
 }
+
+.banner-success {
+  border-color: #0f9d58;
+  background: rgba(15, 157, 88, 0.1);
+}

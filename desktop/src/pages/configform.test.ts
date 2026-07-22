@@ -101,4 +101,14 @@ describe("normalizeRaw", () => {
     const out = normalizeRaw({ providers: { google: { credentials_file: "/path/to/creds.json" } } });
     expect(out.providers).toEqual({ google: { credentials_file: "/path/to/creds.json" } });
   });
+
+  it("providers は spread-then-override(F9): raw.providers の未知フィールドを保ったまま google/microsoft だけ正規化する", () => {
+    // RawConfig 型に無い将来フィールドが providers 直下に来ても消さないことを確認する
+    // (account/detail_sync の正規化と同じ spread-then-override へ統一した回帰テスト)。
+    const input = {
+      providers: { google: { credentials_file: "/path/to/creds.json" }, futureField: "keep-me" },
+    } as unknown as RawConfig;
+    const out = normalizeRaw(input);
+    expect(out.providers).toMatchObject({ google: { credentials_file: "/path/to/creds.json" }, futureField: "keep-me" });
+  });
 });
