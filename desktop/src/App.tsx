@@ -149,7 +149,7 @@ function Shell({ api, onResetDataDir }: { api: ApiClient; onResetDataDir: () => 
   }
 
   return (
-    <main>
+    <main className={tab === "calendar" ? "wide" : undefined}>
       <header className="app-header">
         <h1>calsync</h1>
         <nav className="tabs">

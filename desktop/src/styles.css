@@ -15,8 +15,29 @@ body {
 
 main {
   padding: 1.5rem 2rem;
-  max-width: 960px;
+  max-width: 1400px;
   margin: 0 auto;
+}
+
+/* カレンダータブはウィンドウ幅・残り縦幅いっぱいに使う */
+main.wide {
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  box-sizing: border-box;
+}
+
+.calendar-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.calendar-view .calendar-grid {
+  flex: 1;
+  min-height: 0;
 }
 
 main.setup {
@@ -112,6 +133,11 @@ td {
   border-radius: 8px;
   padding: 1rem 1.25rem;
   margin-bottom: 1.25rem;
+  overflow-x: auto; /* 幅の広いテーブル(digest の長い ID 等)はカード内で横スクロール */
+}
+
+.card td {
+  word-break: break-all; /* 長いカレンダー ID がレイアウトを突き破らないように */
 }
 
 .card h2 {
