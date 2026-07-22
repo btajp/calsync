@@ -166,6 +166,46 @@ func TestEventsMapsAllDayEnd(t *testing.T) {
 // TestEventsCacheSkipsSecondCallAndRefreshBypasses は 60 秒メモリキャッシュが
 // 同一 (from,to) の 2 回目呼び出しでフェイクを再実行しないこと、refresh=1 が
 // キャッシュをバイパスして再実行することを検証する(スペック §4)。
+// TestEventsCacheSetSweepsExpiredEntries は F6 の回帰テスト。set のたびに
+// 期限切れエントリを掃除すること(ビュー切替の連打で from/to の組が際限なく
+// 積み上がるのを防ぐ)。expired なキーは消え、まだ TTL 内のキーは残ることを
+// 確認する。now は eventsCacheSet の引数として直接注入できるため、専用の
+// clock フィールドは追加せず、この注入経路をそのままテストで使う。
+func TestEventsCacheSetSweepsExpiredEntries(t *testing.T) {
+	s := &Server{}
+	t0 := time.Date(2026, 7, 21, 9, 0, 0, 0, time.UTC)
+
+	stale := eventsCacheKey{from: "stale-from", to: "stale-to"}
+	fresh := eventsCacheKey{from: "fresh-from", to: "fresh-to"}
+	newKey := eventsCacheKey{from: "new-from", to: "new-to"}
+
+	s.eventsCacheSet(stale, EventsResponse{Failed: []string{}}, t0)
+	// fresh は stale より後に set し、掃除の時点でもまだ TTL 内に収まるようにする
+	tMid := t0.Add(30 * time.Second)
+	s.eventsCacheSet(fresh, EventsResponse{Failed: []string{}}, tMid)
+
+	if len(s.eventsCache) != 2 {
+		t.Fatalf("want 2 entries before sweep, got %d", len(s.eventsCache))
+	}
+
+	// stale だけが期限切れになる時刻で新規 set する
+	tSweep := t0.Add(eventsCacheTTL + time.Second)
+	s.eventsCacheSet(newKey, EventsResponse{Failed: []string{}}, tSweep)
+
+	if _, ok := s.eventsCache[stale]; ok {
+		t.Fatalf("stale (expired) key must be swept on set, cache = %+v", s.eventsCache)
+	}
+	if _, ok := s.eventsCache[fresh]; !ok {
+		t.Fatalf("fresh (still within TTL at sweep time) key must survive, cache = %+v", s.eventsCache)
+	}
+	if _, ok := s.eventsCache[newKey]; !ok {
+		t.Fatalf("newly set key must be present, cache = %+v", s.eventsCache)
+	}
+	if len(s.eventsCache) != 2 {
+		t.Fatalf("want 2 entries after sweep (fresh + new), got %d: %+v", len(s.eventsCache), s.eventsCache)
+	}
+}
+
 func TestEventsCacheSkipsSecondCallAndRefreshBypasses(t *testing.T) {
 	s, _ := launchdServer(t)
 	calls := 0

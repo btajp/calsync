@@ -38,6 +38,14 @@ func (s *Server) handleAuthStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_json", err.Error(), "")
 		return
 	}
+	// account_id はこの後 TokenStore.Save のファイル名にそのまま使われる
+	// (パストラバーサル対策は auth.ValidateAccountID 側にもある)。ここで
+	// 事前検証しておくと、不正な id をブラウザ往復(OAuth 認可フロー全体)の
+	// 後で気づくのではなく、フロー開始前の 400 で即座に弾ける(仕様書 F4)。
+	if err := auth.ValidateAccountID(body.AccountID); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid_account_id", err.Error(), "")
+		return
+	}
 	cfg, err := config.Load(s.ConfigPath)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "config_read", err.Error(), "")

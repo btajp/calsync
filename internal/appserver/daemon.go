@@ -121,7 +121,14 @@ func (s *Server) handleDaemonAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, stderr, err := s.Runner.Run(r.Context(), "launchctl", args...); err != nil {
-		writeErr(w, http.StatusBadGateway, "launchctl_failed", strings.TrimSpace(stderr), "launchctl の失敗です。ログを確認してください")
+		msg := strings.TrimSpace(stderr)
+		if msg == "" {
+			// launchctl が stderr に何も書かずに失敗するケース(実行ファイルが
+			// 見つからない等)がある。空メッセージのままだと呼び出し元は原因を
+			// 知る手掛かりを一切得られないため、err.Error() にフォールバックする。
+			msg = err.Error()
+		}
+		writeErr(w, http.StatusBadGateway, "launchctl_failed", msg, "launchctl の失敗です。ログを確認してください")
 		return
 	}
 	writeJSON(w, map[string]bool{"ok": true})

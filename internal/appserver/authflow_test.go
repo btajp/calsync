@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +66,47 @@ func TestAuthFlowLifecycle(t *testing.T) {
 	// トークンが保存されている
 	if _, err := os.Stat(filepath.Join(dir, "tokens", "new-acct.json")); err != nil {
 		t.Fatalf("token not saved: %v", err)
+	}
+}
+
+// TestAuthStartRejectsInvalidAccountID は F4 の回帰テスト。account_id が
+// auth.ValidateAccountID の検証に落ちる(パストラバーサル等)場合、ブラウザ
+// 往復を伴う OAuth フロー(RunFlow)を一切起動せず 400 invalid_account_id を
+// 即座に返すこと。
+func TestAuthStartRejectsInvalidAccountID(t *testing.T) {
+	s, _ := testServer(t)
+	var flowCalled int32
+	s.RunFlow = func(ctx context.Context, ocfg *oauth2.Config, port int) (*oauth2.Token, error) {
+		atomic.AddInt32(&flowCalled, 1)
+		return &oauth2.Token{AccessToken: "at"}, nil
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	for _, id := range []string{"", "..", "../escape", "a/b"} {
+		req, _ := http.NewRequest("POST", srv.URL+"/api/auth/start",
+			strings.NewReader(`{"account_id":`+`"`+id+`"`+`,"provider":"microsoft"}`))
+		req.Header.Set("Authorization", "Bearer test-token")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.StatusCode != http.StatusBadRequest {
+			t.Fatalf("account_id=%q: status = %d, want 400", id, res.StatusCode)
+		}
+		var body apiError
+		if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if body.Code != "invalid_account_id" {
+			t.Fatalf("account_id=%q: code = %q, want invalid_account_id", id, body.Code)
+		}
+	}
+	// フローは一度も起動されていない(ブラウザ往復前に弾かれている)
+	time.Sleep(20 * time.Millisecond)
+	if atomic.LoadInt32(&flowCalled) != 0 {
+		t.Fatalf("RunFlow was called %d times, want 0", flowCalled)
 	}
 }
 

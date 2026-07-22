@@ -24,8 +24,10 @@ func (t *TokenStore) path(accountID string) string {
 	return filepath.Join(t.Dir, "tokens", accountID+".json")
 }
 
-// validateAccountID は設定由来の accountID によるパストラバーサルを防ぐ。
-func validateAccountID(accountID string) error {
+// ValidateAccountID は設定由来の accountID によるパストラバーサルを防ぐ。
+// TokenStore の内部呼び出し(Save/Load/Delete)に加え、appserver の
+// POST /api/auth/start でもブラウザ往復前の事前検証として使う(仕様書 F4)。
+func ValidateAccountID(accountID string) error {
 	if accountID == "" || accountID == "." || accountID == ".." || strings.ContainsAny(accountID, `/\`) {
 		return fmt.Errorf("auth: invalid account id %q", accountID)
 	}
@@ -35,7 +37,7 @@ func validateAccountID(accountID string) error {
 // Save はトークンを JSON で保存する(ディレクトリ 0700・ファイル 0600)。
 // 一時ファイル + rename で、クラッシュしても書きかけの JSON を残さない。
 func (t *TokenStore) Save(accountID string, tok *oauth2.Token) error {
-	if err := validateAccountID(accountID); err != nil {
+	if err := ValidateAccountID(accountID); err != nil {
 		return err
 	}
 	if tok == nil {
@@ -66,7 +68,7 @@ func (t *TokenStore) Save(accountID string, tok *oauth2.Token) error {
 
 // Load は保存済みトークンを返す。ファイルが無ければエラー(fs.ErrNotExist を包含)。
 func (t *TokenStore) Load(accountID string) (*oauth2.Token, error) {
-	if err := validateAccountID(accountID); err != nil {
+	if err := ValidateAccountID(accountID); err != nil {
 		return nil, err
 	}
 	data, err := os.ReadFile(t.path(accountID))
@@ -82,7 +84,7 @@ func (t *TokenStore) Load(accountID string) (*oauth2.Token, error) {
 
 // Delete はトークンファイルを削除する。既に無い場合も成功扱い(冪等)。
 func (t *TokenStore) Delete(accountID string) error {
-	if err := validateAccountID(accountID); err != nil {
+	if err := ValidateAccountID(accountID); err != nil {
 		return err
 	}
 	if err := os.Remove(t.path(accountID)); err != nil && !errors.Is(err, fs.ErrNotExist) {

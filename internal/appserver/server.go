@@ -9,6 +9,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -166,10 +167,19 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// ErrEmptyToken は Token が空のまま Serve が呼ばれたときに返る。requireToken は
+// subtle.ConstantTimeCompare で比較するため、Token が空だと Authorization
+// ヘッダが無いリクエスト(got == "")も一致(結果 1)してしまい、認証が事実上
+// 素通しになる。これを起動時に即座に検出して拒否する。
+var ErrEmptyToken = errors.New("appserver: Token must not be empty (refuses to serve with a permissive auth check)")
+
 // Serve は ln で HTTP を提供し、開始直後に {"port":N,"token":"..."} を out に
 // 1 行 JSON で書く(親の殻がこれを読んでハンドシェイクする)。ctx キャンセルで
-// graceful shutdown する。
+// graceful shutdown する。Token が空なら起動せず ErrEmptyToken を返す。
 func (s *Server) Serve(ctx context.Context, ln net.Listener, out io.Writer) error {
+	if s.Token == "" {
+		return ErrEmptyToken
+	}
 	hs, _ := json.Marshal(map[string]any{"port": ln.Addr().(*net.TCPAddr).Port, "token": s.Token})
 	fmt.Fprintln(out, string(hs))
 	srv := &http.Server{Handler: s.Handler()}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -239,6 +240,24 @@ func TestStatusTokensEmptyArrayOnConfigLoadFailure(t *testing.T) {
 	body, _ := io.ReadAll(res.Body)
 	if !strings.Contains(string(body), `"tokens":[]`) {
 		t.Fatalf(`expected literal "tokens":[] in response body, got %s`, body)
+	}
+}
+
+// TestServeRejectsEmptyToken は F2 の回帰テスト。requireToken は
+// subtle.ConstantTimeCompare で比較するため、Token が空だと Authorization
+// ヘッダの無いリクエストも一致してしまい認証が素通しになる。Serve はこれを
+// 未然に防ぐため Token 空なら起動せず即座にエラーを返すこと。
+func TestServeRejectsEmptyToken(t *testing.T) {
+	s, _ := testServer(t)
+	s.Token = ""
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer ln.Close()
+	var out syncBuffer
+	if err := s.Serve(context.Background(), ln, &out); !errors.Is(err, ErrEmptyToken) {
+		t.Fatalf("Serve error = %v, want ErrEmptyToken", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("handshake must not be written when refusing to start, got %q", out.String())
 	}
 }
 

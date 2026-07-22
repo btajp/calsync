@@ -1,6 +1,8 @@
 package appserver
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -77,6 +79,45 @@ func TestDaemonStop(t *testing.T) {
 	res, _ := http.DefaultClient.Do(req)
 	if res.StatusCode != 200 {
 		t.Fatalf("status = %d", res.StatusCode)
+	}
+}
+
+// TestDaemonActionFallsBackToErrErrorWhenStderrEmpty は F3 の回帰テスト。
+// launchctl が失敗したのに stderr へ何も書かない(fakeRunner が返す stderr は
+// 常に空文字列。実運用でも実行ファイル不在等で起こりうる)場合、応答メッセージが
+// 空文字列にならず err.Error() にフォールバックすること。
+func TestDaemonActionFallsBackToErrErrorWhenStderrEmpty(t *testing.T) {
+	s, dir := testServer(t)
+	plist := filepath.Join(dir, "com.btajp.calsync.plist")
+	os.WriteFile(plist, []byte("<plist/>"), 0o600)
+	s.PlistPath = plist
+	s.UID = 501
+	wantErr := errors.New("exec: \"launchctl\": executable file not found in $PATH")
+	fr := &fakeRunner{outputs: map[string]struct {
+		out string
+		err error
+	}{
+		"launchctl print gui/501/com.btajp.calsync":        {out: "state = running\n"},
+		"launchctl kickstart -k gui/501/com.btajp.calsync": {err: wantErr},
+	}}
+	s.Runner = fr
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	req, _ := http.NewRequest("POST", srv.URL+"/api/daemon/restart", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", res.StatusCode)
+	}
+	var body apiError
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Message != wantErr.Error() {
+		t.Fatalf("message = %q, want %q", body.Message, wantErr.Error())
 	}
 }
 

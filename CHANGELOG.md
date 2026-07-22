@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **appserver: 積み残しの防御的ハードニングを一括対応(F1〜F7)**: `internal/provider/google` の `ListCalendars` エラーを同ファイルの他メソッドと同じプレフィックス慣習(`google[%s]: ...`)に統一 / `Serve` は `Token` が空だと `subtle.ConstantTimeCompare` の比較が空同士で一致してしまい認証が事実上素通しになるため、起動時に拒否するよう変更 / `POST /api/daemon/{action}` は launchctl 失敗時に stderr が空ならエラーメッセージが空文字列になっていた問題を修正(`err.Error()` にフォールバック) / `POST /api/auth/start` は `account_id` を `auth.ValidateAccountID`(内部の `validateAccountID` を公開化)で事前検証し、不正な id をブラウザ往復後ではなく開始直後の 400 で弾くように / `GET /api/config` の読み取りを Stat→ReadFile→Stat の mtime 一致確認に変更し TOCTOU(読み取り中の外部書き換え)を縮小(不一致なら 1 回だけ再読み込み、それでも不一致なら 500) / `GET /api/events` のメモリキャッシュに、書き込みのたびに期限切れエントリを掃除する処理を追加(ビュー切替の連打でキーが際限なく積み上がるのを防止) / yamledit の `mergeComments` を修正: フロー記法(`digest_calendars: [a] # comment`)の行末コメントがブロック形式への書き戻し時にコレクション値ノードの `LineComment` として保持され続け、エンコーダが描画位置を持てず隣接する新規キー(`show_origin_in_description` 等)の行へ誤って移動する不具合を修正(実機で観測)
+
 ## [0.2.1] - 2026-07-22
 
 ### Fixed

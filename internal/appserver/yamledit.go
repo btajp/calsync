@@ -100,11 +100,40 @@ func mergeComments(oldN, newN *yaml.Node) {
 			oldVals[oldN.Content[i].Value] = [2]*yaml.Node{oldN.Content[i], oldN.Content[i+1]}
 		}
 		for i := 0; i+1 < len(newN.Content); i += 2 {
-			if pair, ok := oldVals[newN.Content[i].Value]; ok {
-				copyComments(pair[0], newN.Content[i])
-				copyComments(pair[1], newN.Content[i+1])
-				mergeComments(pair[1], newN.Content[i+1])
+			pair, ok := oldVals[newN.Content[i].Value]
+			if !ok {
+				continue
 			}
+			oldKey, oldVal := pair[0], pair[1]
+			newKey, newVal := newN.Content[i], newN.Content[i+1]
+			copyComments(oldKey, newKey)
+			// 値がマッピング/シーケンス(コレクション)で、かつ旧ノードの
+			// LineComment が非空なケースはキー行へ寄せる。フロー記法
+			// (`digest_calendars: [a] # comment`)の行末コメントは
+			// コレクション値ノードの LineComment として保持されるが、
+			// Raw は常に yaml.Marshal 経由でブロック形式(改行区切りの
+			// `- a`)に作り直されるため、コレクション値ノードに
+			// LineComment を残すと yaml.v3 のエンコーダが描画位置を
+			// 持てず、直後の兄弟キーの行末へ取り違えて出力する
+			// (実機で観測: digest_calendars の行コメントが
+			// show_origin_in_description の行へ移動した)。値ノード
+			// 自体の HeadComment/FootComment は位置が変わらないため
+			// そのまま移植し、LineComment だけキー側に寄せることで
+			// 「キーと値の両ノード」を厳密に対応付ける。
+			if (oldVal.Kind == yaml.SequenceNode || oldVal.Kind == yaml.MappingNode) && oldVal.LineComment != "" {
+				if newKey.LineComment == "" {
+					newKey.LineComment = oldVal.LineComment
+				}
+				if newVal.HeadComment == "" {
+					newVal.HeadComment = oldVal.HeadComment
+				}
+				if newVal.FootComment == "" {
+					newVal.FootComment = oldVal.FootComment
+				}
+			} else {
+				copyComments(oldVal, newVal)
+			}
+			mergeComments(oldVal, newVal)
 		}
 	case yaml.SequenceNode:
 		if oldN.Kind != yaml.SequenceNode {
