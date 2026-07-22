@@ -5,6 +5,7 @@
   "permissions": [
     "core:default",
     "dialog:allow-open",
+    "dialog:allow-confirm",
     {
       "identifier": "shell:allow-spawn",
       "allow": [{ "name": "binaries/calsync", "sidecar": true, "args": true }]

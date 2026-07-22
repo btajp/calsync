@@ -31,6 +31,13 @@ export default function App() {
     startSidecar(dataDir)
       .then(async (s) => {
         kill = s.kill;
+        // dev の StrictMode は同一 dataDir の effect を 2 回連続実行するが、sidecar.ts の
+        // module スコープガード(F11)により両者は同じ Promise を共有する。そのため先に
+        // クリーンアップ済みの(=もう使われない)側の .then も実行されてしまい、
+        // onCloseRequested の二重登録や getConfig の二重呼び出しが起きていた。cancelled は
+        // どちらの effect 呼び出しかを区別できるので、ここで早期リターンして防ぐ
+        // (レビュー Minor 対応)。
+        if (cancelled) return;
         void getCurrentWindow().onCloseRequested(() => s.kill());
         try {
           await s.api.getConfig();

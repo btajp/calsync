@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import type { ApiClient } from "../api";
 import { ApiError } from "../api";
 import type { UseMaintenanceResult } from "../maintenance";
@@ -327,9 +328,16 @@ export default function AccountAdd({
   // 完了画面の「リコンサイルを実行」(デスクトップ設計 2026-07-23 §4): 確認ダイアログの上で
   // POST /api/maintenance/reconcile を叩き、起動できたらダッシュボードへ誘導する
   // (実際の反映には数分かかるため、進捗はダッシュボードのバナー/ポーリングで追う)。
-  // 起動自体に失敗した場合(409 等)はこの画面に留まりエラーを表示する。
+  // 起動自体に失敗した場合(409 等)はこの画面に留まりエラーを表示する。wry/WKWebView は
+  // window.confirm の JS ダイアログデリゲートを実装しておらず常に false を返す(サイレント
+  // no-op)ため、ネイティブダイアログを表示する @tauri-apps/plugin-dialog の confirm() を使う
+  // (capabilities に dialog:allow-confirm が必要。レビュー Critical 対応)。
   const handleTriggerMaintenance = async () => {
-    if (!window.confirm("数分かかります。実行中は同期が一時停止します。リコンサイルを実行しますか?")) return;
+    const ok = await confirm("数分かかります。実行中は同期が一時停止します。", {
+      title: "リコンサイル実行",
+      kind: "warning",
+    });
+    if (!ok) return;
     setMaintenanceTriggering(true);
     setMaintenanceError(null);
     try {
