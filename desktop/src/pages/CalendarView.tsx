@@ -247,17 +247,19 @@ export default function CalendarView({ api }: { api: ApiClient }) {
         </div>
       )}
       {loading && <p className="hint">読み込み中…</p>}
-      <FullCalendar
-        plugins={[dayGridPlugin, timeGridPlugin]}
-        initialView="timeGridWeek"
-        headerToolbar={{ left: "prev,next today", center: "title", right: "timeGridWeek,dayGridMonth" }}
-        locale={jaLocale}
-        height="auto"
-        events={fcEvents}
-        eventContent={renderEventContent}
-        datesSet={handleDatesSet}
-        eventClick={handleEventClick}
-      />
+      <div className="calendar-grid">
+        <FullCalendar
+          plugins={[dayGridPlugin, timeGridPlugin]}
+          initialView="timeGridWeek"
+          headerToolbar={{ left: "prev,next today", center: "title", right: "timeGridWeek,dayGridMonth" }}
+          locale={jaLocale}
+          height="100%"
+          events={fcEvents}
+          eventContent={renderEventContent}
+          datesSet={handleDatesSet}
+          eventClick={handleEventClick}
+        />
+      </div>
     </div>
   );
 }
