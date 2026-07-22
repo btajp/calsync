@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,10 +13,19 @@ import (
 	"time"
 )
 
-// maintenanceTimeout は bootout → reconcile → bootstrap 全体に許すコンテキスト
-// 予算(仕様書 §4)。reconcile サブプロセスが長時間かかるケース(初回の
-// FullResync 等)を想定して長めに確保している。
-const maintenanceTimeout = 30 * time.Minute
+// defaultMaintenanceTimeout は reconcile サブプロセスに許す既定の予算(仕様書
+// §4)。reconcile サブプロセスが長時間かかるケース(初回の FullResync 等)を
+// 想定して長めに確保している。Server.MaintenanceTimeout が 0 以下ならこれを使う。
+const defaultMaintenanceTimeout = 30 * time.Minute
+
+// launchctlStepTimeout は bootout/bootstrap 個々の launchctl 呼び出しに許す
+// 予算。reconcile の予算(MaintenanceTimeout)とは意図的に独立させている
+// (レビュー指摘の Critical: 単一 ctx を 3 ステップで共有すると、reconcile が
+// 予算を使い切って ctx が失効した状態で bootstrap を呼ぶことになり、
+// exec.CommandContext はプロセスを起動すらせず context deadline exceeded を
+// 返す。デーモンが停止したまま残ってしまうため、bootout/bootstrap は常に
+// 新鮮な短い予算で実行する)。
+const launchctlStepTimeout = 60 * time.Second
 
 // maintenanceState は進行中のメンテナンス窓(reconcile)1本分の状態。authState
 // (authflow.go)と同じく、バックグラウンド goroutine とリクエストハンドラの
@@ -65,20 +75,41 @@ func (s *Server) handleMaintenanceReconcile(w http.ResponseWriter, r *http.Reque
 }
 
 // runMaintenanceWindow は (1) bootout (2) reconcile サブプロセス (3) bootstrap
-// を常にこの順で実行する。各ステップの失敗は次のステップの実行を妨げない
-// (仕様書の「(3) 成否に関わらず bootstrap で再開」を、bootout の失敗にも
-// 素直に広げたもの: bootout が失敗してもデーモンがまだ動いている可能性がある
-// 状態で reconcile を試すことになるが、store.Open の flock が二重起動を弾く
-// ため実データ破損には至らず、reconcile 側のエラーとして安全に失敗する)。
+// を常にこの順で実行する。bootstrap は単一の defer で保証する: 通常完了・
+// bootout/reconcile の失敗・reconcile の context タイムアウト・想定外の
+// panic のいずれの経路でこの関数を抜けても必ず 1 回実行される(レビュー
+// 指摘の Critical/Important 対応)。bootout が失敗してもデーモンがまだ動いて
+// いる可能性がある状態で reconcile を試すことになるが、store.Open の flock
+// が二重起動を弾くため実データ破損には至らず、reconcile 側のエラーとして
+// 安全に失敗する。
 func (s *Server) runMaintenanceWindow(logPath string) {
-	ctx, cancel := context.WithTimeout(context.Background(), maintenanceTimeout)
+	timeout := s.MaintenanceTimeout
+	if timeout <= 0 {
+		timeout = defaultMaintenanceTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	target := fmt.Sprintf("gui/%d/%s", s.UID, launchdLabel)
 	var errs []string
 
-	if _, stderr, err := s.Runner.Run(ctx, "launchctl", "bootout", target); err != nil {
-		errs = append(errs, "bootout: "+launchctlErrMessage(stderr, err))
+	// bootstrap は defer 側だけで実行する(通常経路で明示的に呼ぶと defer と
+	// 二重実行になる)。panic からの recover もここで行う: reconcile
+	// (Server.RunReconcile は外部から注入可能なフィールドのため、フェイクの
+	// 実装ミス等で panic する可能性がある)が panic しても appserver 全体を
+	// 落とさず、bootstrap を実行して phase=error に記録する。
+	defer func() {
+		if rec := recover(); rec != nil {
+			errs = append(errs, fmt.Sprintf("panic: %v", rec))
+		}
+		if err := s.runLaunchctlStep(ctx, "bootstrap", fmt.Sprintf("gui/%d", s.UID), s.PlistPath); err != nil {
+			errs = append(errs, "bootstrap: "+err.Error())
+		}
+		s.finishMaintenanceWindow(errs)
+	}()
+
+	target := fmt.Sprintf("gui/%d/%s", s.UID, launchdLabel)
+	if err := s.runLaunchctlStep(ctx, "bootout", target); err != nil {
+		errs = append(errs, "bootout: "+err.Error())
 	}
 
 	run := s.RunReconcile
@@ -88,19 +119,21 @@ func (s *Server) runMaintenanceWindow(logPath string) {
 	if err := run(ctx, logPath); err != nil {
 		errs = append(errs, "reconcile: "+err.Error())
 	}
+}
 
-	if _, stderr, err := s.Runner.Run(ctx, "launchctl", "bootstrap", fmt.Sprintf("gui/%d", s.UID), s.PlistPath); err != nil {
-		errs = append(errs, "bootstrap: "+launchctlErrMessage(stderr, err))
+// runLaunchctlStep は launchctl のサブコマンド(bootout/bootstrap)を、parent
+// の残り予算がどうであれ独立した launchctlStepTimeout で実行する。
+// context.WithoutCancel(parent) で親の Done/Err 伝播を切り離してから改めて
+// タイムアウトを設定するため、parent が(reconcile のタイムアウト等で)既に
+// 失効していても exec 系の呼び出しは必ず起動できる。
+func (s *Server) runLaunchctlStep(parent context.Context, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), launchctlStepTimeout)
+	defer cancel()
+	_, stderr, err := s.Runner.Run(ctx, "launchctl", args...)
+	if err != nil {
+		return errors.New(launchctlErrMessage(stderr, err))
 	}
-
-	s.maintSt.mu.Lock()
-	defer s.maintSt.mu.Unlock()
-	if len(errs) > 0 {
-		s.maintSt.phase = "error"
-		s.maintSt.errMsg = strings.Join(errs, "; ")
-		return
-	}
-	s.maintSt.phase = "done"
+	return nil
 }
 
 // launchctlErrMessage は daemon.go の handleDaemonAction と同じフォールバック
@@ -112,6 +145,19 @@ func launchctlErrMessage(stderr string, err error) string {
 		msg = err.Error()
 	}
 	return msg
+}
+
+// finishMaintenanceWindow はメンテナンス窓の最終状態を確定する(runMaintenanceWindow
+// の唯一の出口である defer からのみ呼ぶ)。
+func (s *Server) finishMaintenanceWindow(errs []string) {
+	s.maintSt.mu.Lock()
+	defer s.maintSt.mu.Unlock()
+	if len(errs) > 0 {
+		s.maintSt.phase = "error"
+		s.maintSt.errMsg = strings.Join(errs, "; ")
+		return
+	}
+	s.maintSt.phase = "done"
 }
 
 // handleMaintenanceState は GET /api/maintenance/state。authState

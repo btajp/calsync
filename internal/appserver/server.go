@@ -62,6 +62,11 @@ type Server struct {
 	// s.defaultRunReconcile を都度組み立てる)。テストはフェイクを注入して
 	// 実バイナリの起動・実 launchctl なしに検証する。
 	RunReconcile func(ctx context.Context, logPath string) error
+	// MaintenanceTimeout は reconcile サブプロセスに許す予算(0 以下なら
+	// defaultMaintenanceTimeout = 30 分)。bootout/bootstrap の launchctl 呼び
+	// 出しはこの予算から独立している(maintenance.go の runLaunchctlStep 参照)。
+	// テストは短い値を注入してタイムアウト経路を検証する。
+	MaintenanceTimeout time.Duration
 
 	authSt        authState
 	maintSt       maintenanceState
@@ -74,17 +79,18 @@ type Server struct {
 func New(configPath, dataDir, token string) *Server {
 	home, _ := os.UserHomeDir()
 	return &Server{
-		ConfigPath: configPath,
-		DataDir:    dataDir,
-		Token:      token,
-		Runner:     execRunner{},
-		UID:        os.Getuid(),
-		PlistPath:  filepath.Join(home, "Library", "LaunchAgents", "com.btajp.calsync.plist"),
-		LookPath:   exec.LookPath,
-		RunFlow:    auth.RunLoopbackFlow,
-		ListCals:   defaultListCals,
-		authSt:     authState{phase: "idle"},
-		maintSt:    maintenanceState{phase: "idle"},
+		ConfigPath:         configPath,
+		DataDir:            dataDir,
+		Token:              token,
+		Runner:             execRunner{},
+		UID:                os.Getuid(),
+		PlistPath:          filepath.Join(home, "Library", "LaunchAgents", "com.btajp.calsync.plist"),
+		LookPath:           exec.LookPath,
+		RunFlow:            auth.RunLoopbackFlow,
+		ListCals:           defaultListCals,
+		authSt:             authState{phase: "idle"},
+		maintSt:            maintenanceState{phase: "idle"},
+		MaintenanceTimeout: defaultMaintenanceTimeout,
 	}
 }
 
