@@ -23,8 +23,11 @@ let panelPromise: Promise<WebviewWindow> | null = null;
 // 「表示中なら閉じる」判定だけでは (2) で再表示されてしまう。hide 直後の短時間は
 // Click を「閉じる操作の後半」とみなして再表示を抑制する(ポップオーバーの定石)。
 const DISMISS_SUPPRESS_MS = 350;
+// show 直後にトグル閉じを受け付けない猶予(マウスチャタリング対策)。
+const SHOW_GRACE_MS = 300;
 let panelShown = false;
 let panelHiddenAt = 0;
+let panelShownAt = 0;
 
 function markPanelHidden(): void {
   panelShown = false;
@@ -103,10 +106,15 @@ async function ensurePanel(): Promise<WebviewWindow> {
  * scaleFactor にフォールバックする。
  */
 export async function showPanelNearTray(event: TrayIconEvent): Promise<void> {
-  if (event.type !== "Click") return;
+  // Click は 1 回の物理クリックで buttonState "Down" と "Up" の 2 イベントが届く
+  // (@tauri-apps/api/tray.d.ts の MouseButtonState)。両方に反応すると Down で開いた
+  // 直後に Up がトグル判定に入り「一回のクリックで開いて閉じる」ため、Up だけ扱う。
+  if (event.type !== "Click" || event.buttonState !== "Up") return;
   const panel = await ensurePanel();
   // トグル閉じ: 表示中(blur が発火しない経路)ならこのクリックで閉じる。
+  // ただし show 直後(チャタリング・連打)は閉じ操作とみなさない。
   if (panelShown) {
+    if (shouldSuppressShow(panelShownAt, Date.now(), SHOW_GRACE_MS)) return;
     markPanelHidden();
     await panel.hide();
     return;
@@ -124,4 +132,5 @@ export async function showPanelNearTray(event: TrayIconEvent): Promise<void> {
   await panel.show();
   await panel.setFocus();
   panelShown = true;
+  panelShownAt = Date.now();
 }
