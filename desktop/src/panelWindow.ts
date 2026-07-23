@@ -1,6 +1,7 @@
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { PhysicalPosition } from "@tauri-apps/api/dpi";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { TauriEvent } from "@tauri-apps/api/event";
+import { monitorFromPoint } from "@tauri-apps/api/window";
 import type { BackgroundThrottlingPolicy } from "@tauri-apps/api/window";
 import type { TrayIconEvent } from "@tauri-apps/api/tray";
 
@@ -62,14 +63,26 @@ async function ensurePanel(): Promise<WebviewWindow> {
  * トレイのクリックイベントを受けてポップオーバーを表示する(デスクトップトレイ設計
  * 2026-07-23 §3.2)。位置はトレイアイコンの矩形(event.rect)基準で、x はアイコン中心 -
  * パネル幅の半分、y はアイコン矩形の下端(メニューバー下)にする。
+ *
+ * event.rect は物理ピクセル(PhysicalPosition/PhysicalSize)だが、WebviewWindow の
+ * width/height オプション(PANEL_WIDTH/PANEL_HEIGHT)は論理ピクセルであるため、物理値の
+ * まま PANEL_WIDTH を差し引くと Retina(scaleFactor 2 以上)のディスプレイで位置がずれる
+ * (最終ホールレビュー Fix 3)。トレイクリック座標が属するモニタの scaleFactor で
+ * event.rect を論理ピクセルに変換してから PANEL_WIDTH と同じ座標系で計算する。
+ * monitorFromPoint が null を返す(モニタ境界の特定失敗)場合のみ、パネル自身の
+ * scaleFactor にフォールバックする。
  */
 export async function showPanelNearTray(event: TrayIconEvent): Promise<void> {
   if (event.type !== "Click") return;
   const panel = await ensurePanel();
-  const centerX = event.rect.position.x + event.rect.size.width / 2;
+  const monitor = await monitorFromPoint(event.rect.position.x, event.rect.position.y);
+  const scaleFactor = monitor?.scaleFactor ?? (await panel.scaleFactor());
+  const logicalRectPos = event.rect.position.toLogical(scaleFactor);
+  const logicalRectSize = event.rect.size.toLogical(scaleFactor);
+  const centerX = logicalRectPos.x + logicalRectSize.width / 2;
   const x = Math.round(centerX - PANEL_WIDTH / 2);
-  const y = Math.round(event.rect.position.y + event.rect.size.height);
-  await panel.setPosition(new PhysicalPosition(x, y));
+  const y = Math.round(logicalRectPos.y + logicalRectSize.height);
+  await panel.setPosition(new LogicalPosition(x, y));
   await panel.show();
   await panel.setFocus();
 }

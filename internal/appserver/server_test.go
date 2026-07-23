@@ -289,6 +289,71 @@ func TestServeHandshake(t *testing.T) {
 	}
 }
 
+// TestServeBootstrapsWhenMaintenanceRunning は最終ホールレビュー Fix 1 の回帰テスト。
+// メンテナンス実行中(maintSt.phase=="running")に Serve の ctx がキャンセルされる
+// (Cmd+Q・stdin EOF 等、フロントの確認ダイアログを経由しない終了経路)場合、
+// ensureBootstrapOnShutdown が fresh ctx で launchctl bootstrap を best-effort 実行し、
+// デーモンが bootout されたまま残らないことを確認する。
+func TestServeBootstrapsWhenMaintenanceRunning(t *testing.T) {
+	s, _ := launchdServer(t)
+	rec := &callRecorder{}
+	fr := &fakeRunner{outputs: maintenanceScript(s.UID, s.PlistPath)}
+	s.Runner = &orderRunner{fakeRunner: fr, rec: rec}
+	// 実運用では runMaintenanceWindow が設定する状態を直接注入する(この
+	// テストの関心は Serve 側の最終防衛だけであり、メンテナンス窓そのものの
+	// 呼び出し順序は maintenance_test.go の別テストで検証済み)。
+	s.maintSt.mu.Lock()
+	s.maintSt.phase = "running"
+	s.maintSt.mu.Unlock()
+
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	ctx, cancel := context.WithCancel(context.Background())
+	var out syncBuffer
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(ctx, ln, &out) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for out.Len() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+
+	if calls := rec.snapshot(); len(calls) != 1 || calls[0] != "bootstrap" {
+		t.Fatalf("launchctl calls = %v, want [bootstrap]", calls)
+	}
+}
+
+// TestServeSkipsBootstrapWhenMaintenanceIdle は上のテストの対照。メンテナンスが
+// 実行中でなければ Serve の shutdown 経路は launchctl を一切呼ばないこと
+// (idle/manual/container 運用で余計な bootstrap 副作用を起こさないため)。
+func TestServeSkipsBootstrapWhenMaintenanceIdle(t *testing.T) {
+	s, _ := launchdServer(t)
+	rec := &callRecorder{}
+	fr := &fakeRunner{outputs: maintenanceScript(s.UID, s.PlistPath)}
+	s.Runner = &orderRunner{fakeRunner: fr, rec: rec}
+	// s.maintSt.phase は既定の "idle" のまま。
+
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	ctx, cancel := context.WithCancel(context.Background())
+	var out syncBuffer
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(ctx, ln, &out) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for out.Len() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+
+	if calls := rec.snapshot(); len(calls) != 0 {
+		t.Fatalf("launchctl calls = %v, want none", calls)
+	}
+}
+
 func TestCORSPreflightAllowedOrigin(t *testing.T) {
 	s, _ := testServer(t)
 	srv := httptest.NewServer(s.Handler())

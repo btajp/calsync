@@ -205,10 +205,33 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener, out io.Writer) erro
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
+		s.ensureBootstrapOnShutdown()
 		return nil
 	case err := <-errCh:
 		return err
 	}
+}
+
+// ensureBootstrapOnShutdown は Serve の graceful shutdown 経路(ctx キャンセル)向けの
+// 最終防衛(最終ホールレビュー Fix 1)。第一防衛はデスクトップアプリ側(App.tsx の
+// "quit-app" リスナー)がメンテナンス実行中の終了を確認ダイアログで止めることだが、
+// Cmd+Q や親プロセスの異常終了(stdin EOF・WatchStdinEOF)はそのダイアログを経由しない。
+// runMaintenanceWindow のバックグラウンド goroutine 自身も defer で bootstrap を保証して
+// いるが、cmd_appserver.go の RunE は Serve が返り値を返した時点で終了し、その直後の
+// Go ランタイム終了は他の goroutine を実行途中であっても道連れにするため、goroutine 側の
+// 保証だけでは bootout されたまま復帰できずに終わるおそれがある。ここでは
+// launchctlStepTimeout と同じ fresh な 60 秒予算で bootstrap を best-effort 実行するだけで
+// エラーは無視する: 呼び出し時点でまだ reconcile サブプロセスが動いている可能性があるが、
+// store.Open の flock が二重起動を弾くため実データ破損には至らず、launchd の KeepAlive が
+// reconcile 終了後の再起動を引き継ぐ(runMaintenanceWindow のコメントと同じ理屈)。
+func (s *Server) ensureBootstrapOnShutdown() {
+	s.maintSt.mu.Lock()
+	running := s.maintSt.phase == "running"
+	s.maintSt.mu.Unlock()
+	if !running {
+		return
+	}
+	_ = s.runLaunchctlStep(context.Background(), "bootstrap", fmt.Sprintf("gui/%d", s.UID), s.PlistPath)
 }
 
 // WatchStdinEOF は親(Tauri 殻)の死亡を stdin の EOF で検知して cancel を呼ぶ。

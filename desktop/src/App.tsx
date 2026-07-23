@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { exit } from "@tauri-apps/plugin-process";
@@ -182,6 +182,15 @@ function Shell({
   // ここで生成する(container/error 分岐でも呼ばれるが、ポーリングは running 判明時のみ)。
   const maintenance = useMaintenance(api);
 
+  // "quit-app" リスナーは下の effect の依存配列が [api, sidecar] のみ(トレイ・パネルの
+  // 初期化を api/sidecar が変わらない限り再実行したくないため)なので、リスナーのクロージャに
+  // maintenance.state を直接キャプチャすると以後の phase 更新に追従できない(stale closure)。
+  // ref 経由で常に最新の phase を読めるようにする(最終ホールレビュー Fix 1)。
+  const maintenancePhaseRef = useRef(maintenance.state?.phase);
+  useEffect(() => {
+    maintenancePhaseRef.current = maintenance.state?.phase;
+  }, [maintenance.state?.phase]);
+
   // トレイ・ポップオーバーの初期化(api 接続確立後・デスクトップトレイ設計 2026-07-23 §3)。
   // フックは早期 return より前で無条件に呼ぶ必要があるため maintenance と同じ位置に置く。
   useEffect(() => {
@@ -191,16 +200,37 @@ function Shell({
       void showPanelNearTray(event);
     });
 
+    // データフォルダ変更等で api/sidecar の接続情報が更新された場合、既に開いている
+    // ポップオーバーが古い port/token を掴んだまま死んだ接続を握り続けるのを防ぐため、
+    // 確立時に能動送信する(パネルがまだ生成されていなくても emitTo は無害)。PanelApp は
+    // "api-info" を受信するたびにクライアントを差し替える実装のため、下の "panel-ready"
+    // 経由の送信と合わせてこれだけで完結する(最終ホールレビュー Fix 2)。
+    void emitTo("panel", "api-info", { port: sidecar.port, token: sidecar.token });
+
     const panelReadyPromise = listen("panel-ready", () => {
       void emitTo("panel", "api-info", { port: sidecar.port, token: sidecar.token });
     });
     // ポップオーバーの「終了」ボタン起点。ウィンドウを跨いだ JS モジュールスコープの共有が
     // 無いため、kill クロージャを持つこちら側で「kill してから exit」の順序を保証する
     // (デスクトップトレイ設計 2026-07-23 §3.3。stdin EOF は最終防衛であり、これが唯一の
-    // 明示 kill 呼び出し箇所になる)。
+    // 明示 kill 呼び出し箇所になる)。メンテナンス実行中(reconcile 中はデーモンが
+    // bootout 済み)にここで即終了すると、appserver プロセスも道連れに終了し、
+    // runMaintenanceWindow の bootstrap 保証が完走できずデーモンが停止したまま残る
+    // おそれがあるため、確認ダイアログで既定では終了しないようにする(最終ホールレビュー
+    // Fix 1。Cmd+Q・stdin EOF 経由の終了はこのダイアログを経由できないため、appserver 側
+    // (Serve の shutdown 経路)にも独立した最終防衛を用意してある)。
     const quitAppPromise = listen("quit-app", () => {
-      sidecar.kill();
-      void exit(0);
+      void (async () => {
+        if (maintenancePhaseRef.current === "running") {
+          const proceed = await confirm(
+            "リコンサイル実行中です。完了までお待ちください(完了せずに終了するとデーモンが停止したままになります)",
+            { title: "calsync", kind: "warning", okLabel: "それでも終了", cancelLabel: "キャンセル" },
+          );
+          if (!proceed) return;
+        }
+        sidecar.kill();
+        void exit(0);
+      })();
     });
 
     const fetchTrayEvents = () => {
