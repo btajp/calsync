@@ -46,10 +46,17 @@ interface SortableItem extends ScheduleItem {
  * - イベントが 1 件も無い日付は見出し自体を出さない
  * - 日付は昇順、タイトルが空文字の予定は「(無題)」にする
  */
-export function buildScheduleList(events: EventOut[]): ScheduleDay[] {
+export function buildScheduleList(events: EventOut[], now: Date): ScheduleDay[] {
   const days = new Map<string, { date: Date; items: SortableItem[] }>();
 
   for (const ev of events) {
+    // もう終わった予定は載せない(時刻あり予定のみ判定。開催中は残す)。終日は
+    // 取得窓が今日開始のため「昨日までで終わった終日」はそもそも返らず、当日分は
+    // 日中ずっと有効とみなして残す。end が読めない場合は安全側で表示する。
+    if (!ev.all_day && ev.end) {
+      const endTime = Date.parse(ev.end);
+      if (!Number.isNaN(endTime) && endTime <= now.getTime()) continue;
+    }
     const title = ev.title || "(無題)";
     const date = ev.all_day ? parseLocalDateOnly(ev.all_day_start) : new Date(ev.start);
     const item: SortableItem = ev.all_day
@@ -125,7 +132,7 @@ export default function PanelApp() {
       .events(from, to)
       .then((res) => {
         setError(null);
-        setDays(buildScheduleList(res.events));
+        setDays(buildScheduleList(res.events, new Date()));
       })
       .catch((e) => setError(describeError(e)));
     // 色分けはアカウント定義順に依存する(CalendarView と同じ規則)。取得失敗はベストエフォート。
