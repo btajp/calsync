@@ -1,16 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { emitTo, listen } from "@tauri-apps/api/event";
+import { exit } from "@tauri-apps/plugin-process";
 import { ApiClient, ApiError } from "./api";
 import { startSidecar } from "./sidecar";
 import type { SidecarHandle } from "./sidecar";
 import { useMaintenance } from "./maintenance";
+import { initTray, scheduleFetchRange, setTrayEvents } from "./tray";
+import { showPanelNearTray } from "./panelWindow";
 import Dashboard from "./pages/Dashboard";
 import ConfigForm from "./pages/ConfigForm";
 import AccountAdd from "./pages/AccountAdd";
 import CalendarView from "./pages/CalendarView";
 import UpdateBanner from "./components/UpdateBanner";
 import MaintenanceBanner from "./components/MaintenanceBanner";
+
+// トレイの events 共有(5分ごと)の間隔(デスクトップトレイ設計 2026-07-23 §3.1)。
+const TRAY_EVENTS_REFRESH_MS = 5 * 60_000;
 
 export default function App() {
   const [api, setApi] = useState<ApiClient | null>(null);
@@ -20,6 +27,10 @@ export default function App() {
   // 叩き、config_read(Stat/ReadFile 失敗。典型はファイル不在)のときだけ警告する。YAML パース
   // エラー等の別種の失敗はここでは判定せず通常フロー(各ページの読み込みエラー表示)に委ねる。
   const [configWarning, setConfigWarning] = useState<SidecarHandle | null>(null);
+  // トレイ/ポップオーバーへ渡す接続情報(port/token)+サイドカー kill を Shell へ渡すために保持する
+  // (デスクトップトレイ設計 2026-07-23 §3.2)。api が確定するのと同じ非同期フローの中で、
+  // getConfig の成否に関わらず一度だけ設定する。
+  const [sidecarHandle, setSidecarHandle] = useState<SidecarHandle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dataDir, setDataDir] = useState<string | null>(localStorage.getItem("calsync.dataDir"));
   const [retry, setRetry] = useState(0); // 起動エラー画面の再試行で effect を再発火させる
@@ -38,14 +49,22 @@ export default function App() {
         // どちらの effect 呼び出しかを区別できるので、ここで早期リターンして防ぐ
         // (レビュー Minor 対応)。
         if (cancelled) return;
-        void getCurrentWindow().onCloseRequested(() => s.kill());
+        setSidecarHandle(s);
+        // メインウィンドウを閉じてもアプリは常駐継続する(hide に変更。デスクトップトレイ設計
+        // 2026-07-23 §3.3)。既存のサイドカー kill 処理はここから外し、Shell の
+        // "quit-app" イベント(ポップオーバーの「終了」ボタン起点)でのみ行う —
+        // stdin EOF が最終防衛のため、hide 時にサイドカーを殺してはならない。
+        void getCurrentWindow().onCloseRequested((event) => {
+          event.preventDefault();
+          void getCurrentWindow().hide();
+        });
         try {
           await s.api.getConfig();
           if (!cancelled) setApi(s.api);
         } catch (e) {
           if (cancelled) return;
           if (e instanceof ApiError && e.code === "config_read") {
-            setConfigWarning({ api: s.api, kill: s.kill });
+            setConfigWarning(s);
           } else {
             // calsync.yaml 不在以外の失敗(YAML 破損等)は通常フローに委ね、各ページのエラー
             // 表示・再試行導線(F8 等)に任せる。
@@ -124,8 +143,10 @@ export default function App() {
       </main>
     );
   }
-  if (!api) return <main>appserver に接続中…</main>;
-  return <Shell api={api} onResetDataDir={resetDataDir} />;
+  // sidecarHandle は api と同じ非同期フローの中で先に設定されるため、api が確定した
+  // 時点では常に非 null(型ガードとして両方をチェックする)。
+  if (!api || !sidecarHandle) return <main>appserver に接続中…</main>;
+  return <Shell api={api} sidecar={sidecarHandle} onResetDataDir={resetDataDir} />;
 }
 
 type Tab = "dashboard" | "calendar" | "config" | "account-add";
@@ -144,7 +165,15 @@ const TABS: { key: Tab; label: string }[] = [
 // にコンテナが起動する稀なケースでも書き込み系は 409 で守られる)。
 type ModeCheck = "checking" | "container" | "ok" | "error";
 
-function Shell({ api, onResetDataDir }: { api: ApiClient; onResetDataDir: () => void }) {
+function Shell({
+  api,
+  sidecar,
+  onResetDataDir,
+}: {
+  api: ApiClient;
+  sidecar: SidecarHandle;
+  onResetDataDir: () => void;
+}) {
   const [tab, setTab] = useState<Tab>("dashboard");
   const [modeCheck, setModeCheck] = useState<ModeCheck>("checking");
   const [modeCheckError, setModeCheckError] = useState<string | null>(null);
@@ -152,6 +181,49 @@ function Shell({ api, onResetDataDir }: { api: ApiClient; onResetDataDir: () => 
   // (デスクトップ設計 2026-07-23 §4)。フックは早期 return より前で無条件に呼ぶ必要があるため
   // ここで生成する(container/error 分岐でも呼ばれるが、ポーリングは running 判明時のみ)。
   const maintenance = useMaintenance(api);
+
+  // トレイ・ポップオーバーの初期化(api 接続確立後・デスクトップトレイ設計 2026-07-23 §3)。
+  // フックは早期 return より前で無条件に呼ぶ必要があるため maintenance と同じ位置に置く。
+  useEffect(() => {
+    let cancelled = false;
+
+    void initTray((event) => {
+      void showPanelNearTray(event);
+    });
+
+    const panelReadyPromise = listen("panel-ready", () => {
+      void emitTo("panel", "api-info", { port: sidecar.port, token: sidecar.token });
+    });
+    // ポップオーバーの「終了」ボタン起点。ウィンドウを跨いだ JS モジュールスコープの共有が
+    // 無いため、kill クロージャを持つこちら側で「kill してから exit」の順序を保証する
+    // (デスクトップトレイ設計 2026-07-23 §3.3。stdin EOF は最終防衛であり、これが唯一の
+    // 明示 kill 呼び出し箇所になる)。
+    const quitAppPromise = listen("quit-app", () => {
+      sidecar.kill();
+      void exit(0);
+    });
+
+    const fetchTrayEvents = () => {
+      const { from, to } = scheduleFetchRange(new Date());
+      api
+        .events(from, to)
+        .then((res) => {
+          if (!cancelled) setTrayEvents(res.events);
+        })
+        .catch(() => {
+          // ベストエフォート。トレイタイトルは古いデータのまま次周期まで維持する
+        });
+    };
+    fetchTrayEvents();
+    const id = setInterval(fetchTrayEvents, TRAY_EVENTS_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      void panelReadyPromise.then((u) => u());
+      void quitAppPromise.then((u) => u());
+    };
+  }, [api, sidecar]);
 
   const checkMode = useCallback(() => {
     setModeCheck("checking");

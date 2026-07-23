@@ -12,6 +12,11 @@ export function parseHandshake(line: string): { port: number; token: string } {
 export interface SidecarHandle {
   api: ApiClient;
   kill: () => void;
+  // トレイのポップオーバー(別ウィンドウ)へ ApiClient 相当の接続情報を Tauri イベントで
+  // 引き渡すために port/token を公開する(デスクトップトレイ設計 2026-07-23 §3.2:
+  // 「API 接続情報の受け渡し」。localStorage には書かず、emitTo("panel", "api-info", ...) で渡す)。
+  port: number;
+  token: string;
 }
 
 // dev の React.StrictMode は effect を「マウント→クリーンアップ→再マウント」で 2 回連続実行する。
@@ -59,6 +64,8 @@ async function spawnSidecar(dataDir: string): Promise<SidecarHandle> {
         resolve({
           api: new ApiClient(`http://127.0.0.1:${hs.port}`, hs.token),
           kill: () => { void child?.kill(); },
+          port: hs.port,
+          token: hs.token,
         });
       } catch {
         // 起動ノイズ行は無視して次の行を待つ

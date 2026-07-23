@@ -290,3 +290,61 @@ p.error {
   border-color: #0f9d58;
   background: rgba(15, 157, 88, 0.1);
 }
+
+/* トレイのポップオーバー(PanelApp)。frameless な専用ウィンドウ全体を占有する
+   (デスクトップトレイ設計 2026-07-23 §3.2)。main 用のグローバルスタイル
+   (padding/max-width 等)を継承しないよう、ルート要素は <main> ではなく <div> にしている。 */
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 0.75rem 1rem;
+  overflow: hidden;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.3);
+}
+
+.panel-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.panel-day {
+  margin-bottom: 0.75rem;
+}
+
+.panel-day h3 {
+  font-size: 0.8rem;
+  font-weight: 600;
+  opacity: 0.7;
+  margin: 0 0 0.35rem;
+}
+
+.panel-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0;
+  font-size: 0.9rem;
+}
+
+.panel-item-time {
+  flex-shrink: 0;
+  width: 3.2rem;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

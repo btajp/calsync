@@ -7,7 +7,11 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# tray-icon: メニューバー常駐(TrayIcon)を JS から生成するために必要(デスクトップトレイ設計
+# 2026-07-23 §3.4)。image-png: トレイアイコンを PNG バイト列から Image.fromBytes() で読み込む
+# ために必要(tauri 2.11.5 の Cargo.toml で image/png へマップされる機能フラグ。これが無いと
+# PNG デコードが実行時エラーになる。crates.io の tauri crate ソースで確認済み)。
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
