@@ -134,6 +134,15 @@ func (s *Server) eventsCacheSet(key eventsCacheKey, resp EventsResponse, now tim
 	if s.eventsCache == nil {
 		s.eventsCache = make(map[eventsCacheKey]eventsCacheEntry)
 	}
+	// 窓を変えながらのビュー切替を繰り返すと eventsCache のキー(from/to の
+	// 組)が際限なく増える(全キーが TTL 切れでも参照されない限りマップに
+	// 残り続ける)。書き込みのたびに期限切れエントリを掃除して、無制限に
+	// メモリを積み上げないようにする。
+	for k, e := range s.eventsCache {
+		if now.After(e.expires) {
+			delete(s.eventsCache, k)
+		}
+	}
 	s.eventsCache[key] = eventsCacheEntry{resp: resp, expires: now.Add(eventsCacheTTL)}
 }
 

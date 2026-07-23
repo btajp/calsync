@@ -99,7 +99,21 @@ func (s *Server) requireNotContainer(w http.ResponseWriter, r *http.Request) boo
 
 // handleDaemonAction は POST /api/daemon/{start|stop|restart} を処理する。
 // launchd モード外は 409 を返す。成功時は {"ok":true} を返す。
+//
+// メンテナンス実行中(maintSt.phase=="running")は、フロントの MaintenanceBanner が
+// デーモン操作 UI を無効化する想定だが、それはクライアント側の見た目上のガードに
+// すぎない。サーバ側でも同じ 409 で拒否しないと、UI の隙(タブ切替直後の再描画・
+// 別ウィンドウからの直接リクエスト等)から launchctl bootout/kickstart がメンテナンス
+// 窓の bootout/bootstrap と競合し得る(最終ホールレビュー Fix 3)。
 func (s *Server) handleDaemonAction(w http.ResponseWriter, r *http.Request) {
+	s.maintSt.mu.Lock()
+	maintenanceRunning := s.maintSt.phase == "running"
+	s.maintSt.mu.Unlock()
+	if maintenanceRunning {
+		writeErr(w, http.StatusConflict, "maintenance_in_progress", "a maintenance reconcile is already running", "")
+		return
+	}
+
 	info := s.detectDaemon(r.Context())
 	if info.Mode != "launchd" {
 		writeErr(w, http.StatusConflict, "not_launchd",
@@ -121,7 +135,14 @@ func (s *Server) handleDaemonAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, stderr, err := s.Runner.Run(r.Context(), "launchctl", args...); err != nil {
-		writeErr(w, http.StatusBadGateway, "launchctl_failed", strings.TrimSpace(stderr), "launchctl の失敗です。ログを確認してください")
+		msg := strings.TrimSpace(stderr)
+		if msg == "" {
+			// launchctl が stderr に何も書かずに失敗するケース(実行ファイルが
+			// 見つからない等)がある。空メッセージのままだと呼び出し元は原因を
+			// 知る手掛かりを一切得られないため、err.Error() にフォールバックする。
+			msg = err.Error()
+		}
+		writeErr(w, http.StatusBadGateway, "launchctl_failed", msg, "launchctl の失敗です。ログを確認してください")
 		return
 	}
 	writeJSON(w, map[string]bool{"ok": true})

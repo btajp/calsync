@@ -47,6 +47,13 @@ export interface StatusResponse {
 }
 export interface CalendarListEntry { id: string; summary: string; primary: boolean; access_role: string }
 export interface AuthState { phase: "idle" | "running" | "done" | "error"; account_id?: string; error?: string; hint?: string }
+// GET /api/maintenance/state(internal/appserver/maintenance.go の handleMaintenanceState)。
+// サーバーは phase/log_path/error を常に文字列で返す(空文字はキー自体が無かったことを示さない)。
+export interface MaintenanceState {
+  phase: "idle" | "running" | "done" | "error";
+  log_path: string;
+  error: string;
+}
 
 // EventOut は GET /api/events の 1 件(internal/appserver/events.go の EventOut と
 // json タグを完全一致させること。desktop calendar view design 2026-07-21 §4)。

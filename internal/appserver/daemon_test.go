@@ -1,6 +1,8 @@
 package appserver
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -80,6 +82,45 @@ func TestDaemonStop(t *testing.T) {
 	}
 }
 
+// TestDaemonActionFallsBackToErrErrorWhenStderrEmpty は F3 の回帰テスト。
+// launchctl が失敗したのに stderr へ何も書かない(fakeRunner が返す stderr は
+// 常に空文字列。実運用でも実行ファイル不在等で起こりうる)場合、応答メッセージが
+// 空文字列にならず err.Error() にフォールバックすること。
+func TestDaemonActionFallsBackToErrErrorWhenStderrEmpty(t *testing.T) {
+	s, dir := testServer(t)
+	plist := filepath.Join(dir, "com.btajp.calsync.plist")
+	os.WriteFile(plist, []byte("<plist/>"), 0o600)
+	s.PlistPath = plist
+	s.UID = 501
+	wantErr := errors.New("exec: \"launchctl\": executable file not found in $PATH")
+	fr := &fakeRunner{outputs: map[string]struct {
+		out string
+		err error
+	}{
+		"launchctl print gui/501/com.btajp.calsync":        {out: "state = running\n"},
+		"launchctl kickstart -k gui/501/com.btajp.calsync": {err: wantErr},
+	}}
+	s.Runner = fr
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	req, _ := http.NewRequest("POST", srv.URL+"/api/daemon/restart", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", res.StatusCode)
+	}
+	var body apiError
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Message != wantErr.Error() {
+		t.Fatalf("message = %q, want %q", body.Message, wantErr.Error())
+	}
+}
+
 // TestDaemonDetectionStalePlistPrefersContainer は最終ホールレビュー Fix 2 の
 // 回帰テスト。plist は存在するが launchctl print が失敗する(installed but not
 // loaded = 未ロード)状態で、かつ docker で calsync コンテナが稼働中の場合は
@@ -105,6 +146,46 @@ func TestDaemonDetectionStalePlistPrefersContainer(t *testing.T) {
 	get(t, srv, "test-token", "/api/status", &got)
 	if got.Daemon.Mode != "container" {
 		t.Fatalf("mode = %q, want container (stale plist + running container must prefer container)", got.Daemon.Mode)
+	}
+}
+
+// TestDaemonActionRejectedDuringMaintenance は最終ホールレビュー Fix 3 の回帰
+// テスト。メンテナンス実行中(maintSt.phase=="running")は launchd 管理下でも
+// POST /api/daemon/{action} を 409 maintenance_in_progress で拒否し、
+// launchctl を一切呼ばないこと。
+func TestDaemonActionRejectedDuringMaintenance(t *testing.T) {
+	s, dir := testServer(t)
+	plist := filepath.Join(dir, "com.btajp.calsync.plist")
+	os.WriteFile(plist, []byte("<plist/>"), 0o600)
+	s.PlistPath = plist
+	s.UID = 501
+	// 台本を空にしておき、万一 launchctl が呼ばれたら「unexpected command」で
+	// 即座に失敗が見えるようにする。
+	s.Runner = &fakeRunner{outputs: map[string]struct {
+		out string
+		err error
+	}{}}
+	s.maintSt.mu.Lock()
+	s.maintSt.phase = "running"
+	s.maintSt.mu.Unlock()
+
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	req, _ := http.NewRequest("POST", srv.URL+"/api/daemon/restart", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", res.StatusCode)
+	}
+	var body apiError
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Code != "maintenance_in_progress" {
+		t.Fatalf("code = %q, want maintenance_in_progress", body.Code)
 	}
 }
 

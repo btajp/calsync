@@ -1,16 +1,36 @@
-import { useCallback, useEffect, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ApiClient } from "./api";
+import { emitTo, listen } from "@tauri-apps/api/event";
+import { exit } from "@tauri-apps/plugin-process";
+import { ApiClient, ApiError } from "./api";
 import { startSidecar } from "./sidecar";
+import type { SidecarHandle } from "./sidecar";
+import { useMaintenance } from "./maintenance";
+import { initTray, scheduleFetchRange, setTrayEvents } from "./tray";
+import { showPanelNearTray } from "./panelWindow";
 import Dashboard from "./pages/Dashboard";
 import ConfigForm from "./pages/ConfigForm";
 import AccountAdd from "./pages/AccountAdd";
 import CalendarView from "./pages/CalendarView";
 import UpdateBanner from "./components/UpdateBanner";
+import MaintenanceBanner from "./components/MaintenanceBanner";
+
+// トレイの events 共有(5分ごと)の間隔(デスクトップトレイ設計 2026-07-23 §3.1)。
+const TRAY_EVENTS_REFRESH_MS = 5 * 60_000;
 
 export default function App() {
   const [api, setApi] = useState<ApiClient | null>(null);
+  // F12: フォルダ選択直後、サイドカー起動(handshake)自体は calsync.yaml の有無に関わらず成功する
+  // (appserver はリスナー起動時点で handshake を出し、設定ファイルは各 API 呼び出し時に読む)ため、
+  // 「間違って親フォルダ等を選んだ」ケースをここで検出できない。起動直後に 1 回 GET /api/config を
+  // 叩き、config_read(Stat/ReadFile 失敗。典型はファイル不在)のときだけ警告する。YAML パース
+  // エラー等の別種の失敗はここでは判定せず通常フロー(各ページの読み込みエラー表示)に委ねる。
+  const [configWarning, setConfigWarning] = useState<SidecarHandle | null>(null);
+  // トレイ/ポップオーバーへ渡す接続情報(port/token)+サイドカー kill を Shell へ渡すために保持する
+  // (デスクトップトレイ設計 2026-07-23 §3.2)。api が確定するのと同じ非同期フローの中で、
+  // getConfig の成否に関わらず一度だけ設定する。
+  const [sidecarHandle, setSidecarHandle] = useState<SidecarHandle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dataDir, setDataDir] = useState<string | null>(localStorage.getItem("calsync.dataDir"));
   const [retry, setRetry] = useState(0); // 起動エラー画面の再試行で effect を再発火させる
@@ -18,15 +38,51 @@ export default function App() {
   useEffect(() => {
     if (!dataDir) return;
     let kill: (() => void) | undefined;
+    let cancelled = false;
     startSidecar(dataDir)
-      .then((s) => {
-        setApi(s.api);
+      .then(async (s) => {
         kill = s.kill;
-        void getCurrentWindow().onCloseRequested(() => s.kill());
+        // dev の StrictMode は同一 dataDir の effect を 2 回連続実行するが、sidecar.ts の
+        // module スコープガード(F11)により両者は同じ Promise を共有する。そのため先に
+        // クリーンアップ済みの(=もう使われない)側の .then も実行されてしまい、
+        // onCloseRequested の二重登録や getConfig の二重呼び出しが起きていた。cancelled は
+        // どちらの effect 呼び出しかを区別できるので、ここで早期リターンして防ぐ
+        // (レビュー Minor 対応)。
+        if (cancelled) return;
+        setSidecarHandle(s);
+        // メインウィンドウを閉じてもアプリは常駐継続する(hide に変更。デスクトップトレイ設計
+        // 2026-07-23 §3.3)。既存のサイドカー kill 処理はここから外し、Shell の
+        // "quit-app" イベント(ポップオーバーの「終了」ボタン起点)でのみ行う —
+        // stdin EOF が最終防衛のため、hide 時にサイドカーを殺してはならない。
+        void getCurrentWindow().onCloseRequested((event) => {
+          event.preventDefault();
+          void getCurrentWindow().hide();
+        });
+        try {
+          await s.api.getConfig();
+          if (!cancelled) setApi(s.api);
+        } catch (e) {
+          if (cancelled) return;
+          if (e instanceof ApiError && e.code === "config_read") {
+            setConfigWarning(s);
+          } else {
+            // calsync.yaml 不在以外の失敗(YAML 破損等)は通常フローに委ね、各ページのエラー
+            // 表示・再試行導線(F8 等)に任せる。
+            setApi(s.api);
+          }
+        }
       })
-      .catch((e) => setError(String(e)));
-    return () => kill?.();
+      .catch((e) => { if (!cancelled) setError(String(e)); });
+    return () => { cancelled = true; kill?.(); };
   }, [dataDir, retry]);
+
+  const resetDataDir = useCallback(() => {
+    localStorage.removeItem("calsync.dataDir");
+    setError(null);
+    setConfigWarning(null);
+    setApi(null);
+    setDataDir(null);
+  }, []);
 
   if (!dataDir) {
     return (
@@ -57,15 +113,40 @@ export default function App() {
           <button onClick={() => { setError(null); setRetry((r) => r + 1); }}>
             再試行
           </button>
-          <button className="link-button" onClick={() => { localStorage.removeItem("calsync.dataDir"); setError(null); setDataDir(null); }}>
+          <button className="link-button" onClick={resetDataDir}>
             データフォルダ変更
           </button>
         </div>
       </main>
     );
   }
-  if (!api) return <main>appserver に接続中…</main>;
-  return <Shell api={api} onResetDataDir={() => { localStorage.removeItem("calsync.dataDir"); setDataDir(null); }} />;
+  if (configWarning) {
+    return (
+      <main className="setup">
+        <h1>calsync</h1>
+        <UpdateBanner />
+        <p className="error">
+          選択したフォルダに calsync.yaml がありません。data ディレクトリを選んでいますか?
+        </p>
+        <div className="button-row">
+          <button onClick={resetDataDir}>選び直す</button>
+          <button
+            className="link-button"
+            onClick={() => {
+              setApi(configWarning.api);
+              setConfigWarning(null);
+            }}
+          >
+            このまま使う
+          </button>
+        </div>
+      </main>
+    );
+  }
+  // sidecarHandle は api と同じ非同期フローの中で先に設定されるため、api が確定した
+  // 時点では常に非 null(型ガードとして両方をチェックする)。
+  if (!api || !sidecarHandle) return <main>appserver に接続中…</main>;
+  return <Shell api={api} sidecar={sidecarHandle} onResetDataDir={resetDataDir} />;
 }
 
 type Tab = "dashboard" | "calendar" | "config" | "account-add";
@@ -84,10 +165,95 @@ const TABS: { key: Tab; label: string }[] = [
 // にコンテナが起動する稀なケースでも書き込み系は 409 で守られる)。
 type ModeCheck = "checking" | "container" | "ok" | "error";
 
-function Shell({ api, onResetDataDir }: { api: ApiClient; onResetDataDir: () => void }) {
+function Shell({
+  api,
+  sidecar,
+  onResetDataDir,
+}: {
+  api: ApiClient;
+  sidecar: SidecarHandle;
+  onResetDataDir: () => void;
+}) {
   const [tab, setTab] = useState<Tab>("dashboard");
   const [modeCheck, setModeCheck] = useState<ModeCheck>("checking");
   const [modeCheckError, setModeCheckError] = useState<string | null>(null);
+  // maintenance state は App(Shell)レベルで一元管理し、各タブへ props で配る
+  // (デスクトップ設計 2026-07-23 §4)。フックは早期 return より前で無条件に呼ぶ必要があるため
+  // ここで生成する(container/error 分岐でも呼ばれるが、ポーリングは running 判明時のみ)。
+  const maintenance = useMaintenance(api);
+
+  // "quit-app" リスナーは下の effect の依存配列が [api, sidecar] のみ(トレイ・パネルの
+  // 初期化を api/sidecar が変わらない限り再実行したくないため)なので、リスナーのクロージャに
+  // maintenance.state を直接キャプチャすると以後の phase 更新に追従できない(stale closure)。
+  // ref 経由で常に最新の phase を読めるようにする(最終ホールレビュー Fix 1)。
+  const maintenancePhaseRef = useRef(maintenance.state?.phase);
+  useEffect(() => {
+    maintenancePhaseRef.current = maintenance.state?.phase;
+  }, [maintenance.state?.phase]);
+
+  // トレイ・ポップオーバーの初期化(api 接続確立後・デスクトップトレイ設計 2026-07-23 §3)。
+  // フックは早期 return より前で無条件に呼ぶ必要があるため maintenance と同じ位置に置く。
+  useEffect(() => {
+    let cancelled = false;
+
+    void initTray((event) => {
+      void showPanelNearTray(event);
+    });
+
+    // データフォルダ変更等で api/sidecar の接続情報が更新された場合、既に開いている
+    // ポップオーバーが古い port/token を掴んだまま死んだ接続を握り続けるのを防ぐため、
+    // 確立時に能動送信する(パネルがまだ生成されていなくても emitTo は無害)。PanelApp は
+    // "api-info" を受信するたびにクライアントを差し替える実装のため、下の "panel-ready"
+    // 経由の送信と合わせてこれだけで完結する(最終ホールレビュー Fix 2)。
+    void emitTo("panel", "api-info", { port: sidecar.port, token: sidecar.token });
+
+    const panelReadyPromise = listen("panel-ready", () => {
+      void emitTo("panel", "api-info", { port: sidecar.port, token: sidecar.token });
+    });
+    // ポップオーバーの「終了」ボタン起点。ウィンドウを跨いだ JS モジュールスコープの共有が
+    // 無いため、kill クロージャを持つこちら側で「kill してから exit」の順序を保証する
+    // (デスクトップトレイ設計 2026-07-23 §3.3。stdin EOF は最終防衛であり、これが唯一の
+    // 明示 kill 呼び出し箇所になる)。メンテナンス実行中(reconcile 中はデーモンが
+    // bootout 済み)にここで即終了すると、appserver プロセスも道連れに終了し、
+    // runMaintenanceWindow の bootstrap 保証が完走できずデーモンが停止したまま残る
+    // おそれがあるため、確認ダイアログで既定では終了しないようにする(最終ホールレビュー
+    // Fix 1。Cmd+Q・stdin EOF 経由の終了はこのダイアログを経由できないため、appserver 側
+    // (Serve の shutdown 経路)にも独立した最終防衛を用意してある)。
+    const quitAppPromise = listen("quit-app", () => {
+      void (async () => {
+        if (maintenancePhaseRef.current === "running") {
+          const proceed = await confirm(
+            "リコンサイル実行中です。完了までお待ちください(完了せずに終了するとデーモンが停止したままになります)",
+            { title: "calsync", kind: "warning", okLabel: "それでも終了", cancelLabel: "キャンセル" },
+          );
+          if (!proceed) return;
+        }
+        sidecar.kill();
+        void exit(0);
+      })();
+    });
+
+    const fetchTrayEvents = () => {
+      const { from, to } = scheduleFetchRange(new Date());
+      api
+        .events(from, to)
+        .then((res) => {
+          if (!cancelled) setTrayEvents(res.events);
+        })
+        .catch(() => {
+          // ベストエフォート。トレイタイトルは古いデータのまま次周期まで維持する
+        });
+    };
+    fetchTrayEvents();
+    const id = setInterval(fetchTrayEvents, TRAY_EVENTS_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      void panelReadyPromise.then((u) => u());
+      void quitAppPromise.then((u) => u());
+    };
+  }, [api, sidecar]);
 
   const checkMode = useCallback(() => {
     setModeCheck("checking");
@@ -169,11 +335,16 @@ function Shell({ api, onResetDataDir }: { api: ApiClient; onResetDataDir: () => 
       </header>
 
       <UpdateBanner />
+      <MaintenanceBanner state={maintenance.state} />
 
-      {tab === "dashboard" && <Dashboard api={api} />}
+      {tab === "dashboard" && <Dashboard api={api} maintenance={maintenance} />}
       {tab === "calendar" && <CalendarView api={api} />}
-      {tab === "config" && <ConfigForm api={api} onGoToAccountAdd={() => setTab("account-add")} />}
-      {tab === "account-add" && <AccountAdd api={api} onGoToDashboard={() => setTab("dashboard")} />}
+      {tab === "config" && (
+        <ConfigForm api={api} maintenance={maintenance} onGoToAccountAdd={() => setTab("account-add")} />
+      )}
+      {tab === "account-add" && (
+        <AccountAdd api={api} maintenance={maintenance} onGoToDashboard={() => setTab("dashboard")} />
+      )}
     </main>
   );
 }

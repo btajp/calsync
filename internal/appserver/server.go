@@ -9,6 +9,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -56,8 +57,19 @@ type Server struct {
 	// s.defaultCollectEvents を都度組み立てる)。テストはフェイクを注入して
 	// 読み取り専用プロバイダ・実 SQLite なしに検証する。
 	CollectEvents func(ctx context.Context, w model.Window) ([]engine.DigestEntry, []string, error)
+	// RunReconcile は POST /api/maintenance/reconcile が bootout 後に実行する
+	// reconcile サブプロセスの実体(既定は nil。runMaintenanceWindow が
+	// s.defaultRunReconcile を都度組み立てる)。テストはフェイクを注入して
+	// 実バイナリの起動・実 launchctl なしに検証する。
+	RunReconcile func(ctx context.Context, logPath string) error
+	// MaintenanceTimeout は reconcile サブプロセスに許す予算(0 以下なら
+	// defaultMaintenanceTimeout = 30 分)。bootout/bootstrap の launchctl 呼び
+	// 出しはこの予算から独立している(maintenance.go の runLaunchctlStep 参照)。
+	// テストは短い値を注入してタイムアウト経路を検証する。
+	MaintenanceTimeout time.Duration
 
 	authSt        authState
+	maintSt       maintenanceState
 	eventsCacheMu sync.Mutex
 	eventsCache   map[eventsCacheKey]eventsCacheEntry
 }
@@ -67,16 +79,18 @@ type Server struct {
 func New(configPath, dataDir, token string) *Server {
 	home, _ := os.UserHomeDir()
 	return &Server{
-		ConfigPath: configPath,
-		DataDir:    dataDir,
-		Token:      token,
-		Runner:     execRunner{},
-		UID:        os.Getuid(),
-		PlistPath:  filepath.Join(home, "Library", "LaunchAgents", "com.btajp.calsync.plist"),
-		LookPath:   exec.LookPath,
-		RunFlow:    auth.RunLoopbackFlow,
-		ListCals:   defaultListCals,
-		authSt:     authState{phase: "idle"},
+		ConfigPath:         configPath,
+		DataDir:            dataDir,
+		Token:              token,
+		Runner:             execRunner{},
+		UID:                os.Getuid(),
+		PlistPath:          filepath.Join(home, "Library", "LaunchAgents", "com.btajp.calsync.plist"),
+		LookPath:           exec.LookPath,
+		RunFlow:            auth.RunLoopbackFlow,
+		ListCals:           defaultListCals,
+		authSt:             authState{phase: "idle"},
+		maintSt:            maintenanceState{phase: "idle"},
+		MaintenanceTimeout: defaultMaintenanceTimeout,
 	}
 }
 
@@ -93,6 +107,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/accounts/{id}/calendars", s.handleCalendars)
 	mux.HandleFunc("GET /api/doctor", s.handleDoctor)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
+	mux.HandleFunc("POST /api/maintenance/reconcile", s.handleMaintenanceReconcile)
+	mux.HandleFunc("GET /api/maintenance/state", s.handleMaintenanceState)
 	return s.withCORS(s.requireToken(mux))
 }
 
@@ -166,10 +182,19 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// ErrEmptyToken は Token が空のまま Serve が呼ばれたときに返る。requireToken は
+// subtle.ConstantTimeCompare で比較するため、Token が空だと Authorization
+// ヘッダが無いリクエスト(got == "")も一致(結果 1)してしまい、認証が事実上
+// 素通しになる。これを起動時に即座に検出して拒否する。
+var ErrEmptyToken = errors.New("appserver: Token must not be empty (refuses to serve with a permissive auth check)")
+
 // Serve は ln で HTTP を提供し、開始直後に {"port":N,"token":"..."} を out に
 // 1 行 JSON で書く(親の殻がこれを読んでハンドシェイクする)。ctx キャンセルで
-// graceful shutdown する。
+// graceful shutdown する。Token が空なら起動せず ErrEmptyToken を返す。
 func (s *Server) Serve(ctx context.Context, ln net.Listener, out io.Writer) error {
+	if s.Token == "" {
+		return ErrEmptyToken
+	}
 	hs, _ := json.Marshal(map[string]any{"port": ln.Addr().(*net.TCPAddr).Port, "token": s.Token})
 	fmt.Fprintln(out, string(hs))
 	srv := &http.Server{Handler: s.Handler()}
@@ -180,10 +205,33 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener, out io.Writer) erro
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
+		s.ensureBootstrapOnShutdown()
 		return nil
 	case err := <-errCh:
 		return err
 	}
+}
+
+// ensureBootstrapOnShutdown は Serve の graceful shutdown 経路(ctx キャンセル)向けの
+// 最終防衛(最終ホールレビュー Fix 1)。第一防衛はデスクトップアプリ側(App.tsx の
+// "quit-app" リスナー)がメンテナンス実行中の終了を確認ダイアログで止めることだが、
+// Cmd+Q や親プロセスの異常終了(stdin EOF・WatchStdinEOF)はそのダイアログを経由しない。
+// runMaintenanceWindow のバックグラウンド goroutine 自身も defer で bootstrap を保証して
+// いるが、cmd_appserver.go の RunE は Serve が返り値を返した時点で終了し、その直後の
+// Go ランタイム終了は他の goroutine を実行途中であっても道連れにするため、goroutine 側の
+// 保証だけでは bootout されたまま復帰できずに終わるおそれがある。ここでは
+// launchctlStepTimeout と同じ fresh な 60 秒予算で bootstrap を best-effort 実行するだけで
+// エラーは無視する: 呼び出し時点でまだ reconcile サブプロセスが動いている可能性があるが、
+// store.Open の flock が二重起動を弾くため実データ破損には至らず、launchd の KeepAlive が
+// reconcile 終了後の再起動を引き継ぐ(runMaintenanceWindow のコメントと同じ理屈)。
+func (s *Server) ensureBootstrapOnShutdown() {
+	s.maintSt.mu.Lock()
+	running := s.maintSt.phase == "running"
+	s.maintSt.mu.Unlock()
+	if !running {
+		return
+	}
+	_ = s.runLaunchctlStep(context.Background(), "bootstrap", fmt.Sprintf("gui/%d", s.UID), s.PlistPath)
 }
 
 // WatchStdinEOF は親(Tauri 殻)の死亡を stdin の EOF で検知して cancel を呼ぶ。

@@ -175,7 +175,7 @@ func (c *Client) ListCalendars(ctx context.Context) ([]CalendarListEntry, error)
 	for {
 		res, err := call.Context(ctx).Do()
 		if err != nil {
-			return nil, fmt.Errorf("google calendar list (%s): %w", c.accountID, err)
+			return nil, fmt.Errorf("google[%s]: calendar list: %w", c.accountID, err)
 		}
 		for _, it := range res.Items {
 			out = append(out, CalendarListEntry{ID: it.Id, Summary: it.Summary, Primary: it.Primary, AccessRole: it.AccessRole})

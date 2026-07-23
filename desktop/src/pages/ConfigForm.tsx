@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ApiClient } from "../api";
 import { ApiError } from "../api";
+import type { UseMaintenanceResult } from "../maintenance";
 import type { RawAccount, RawConfig, RawDetailSync, RawSlack } from "../types";
 
 const BUSY_SHOW_AS_OPTIONS = ["free", "tentative", "busy", "oof", "workingElsewhere", "unknown"] as const;
@@ -90,8 +91,11 @@ export function normalizeRaw(raw: RawConfig): RawConfig {
     reconcile_at: strOrUndef(raw.reconcile_at),
     busy_show_as: arrOrUndef(raw.busy_show_as),
     notifications: slack ? { slack } : undefined,
+    // 他の枝(account/detail_sync)と同じ spread-then-override(F9): raw.providers に
+    // 型定義に無いフィールドが将来増えても素通しし、google/microsoft だけ正規化値で上書きする。
     providers: hasProviders
       ? {
+          ...raw.providers,
           google: googleFile !== undefined ? { credentials_file: googleFile } : undefined,
           microsoft: msClientId !== undefined ? { client_id: msClientId } : undefined,
         }
@@ -439,7 +443,15 @@ function DetailSyncSection({
   );
 }
 
-export default function ConfigForm({ api, onGoToAccountAdd }: { api: ApiClient; onGoToAccountAdd?: () => void }) {
+export default function ConfigForm({
+  api,
+  maintenance,
+  onGoToAccountAdd,
+}: {
+  api: ApiClient;
+  maintenance: UseMaintenanceResult;
+  onGoToAccountAdd?: () => void;
+}) {
   const [draft, setDraft] = useState<RawConfig | null>(null);
   const [mtime, setMtime] = useState<string | null>(null);
   const [calendarsText, setCalendarsText] = useState<string[]>([]);
@@ -615,8 +627,11 @@ export default function ConfigForm({ api, onGoToAccountAdd }: { api: ApiClient; 
       />
 
       <section className="card">
+        {maintenance.blocking && (
+          <p className="hint">リコンサイル実行中のため保存できません。完了までお待ちください。</p>
+        )}
         <div className="button-row">
-          <button onClick={() => void handleSave()} disabled={saving}>
+          <button onClick={() => void handleSave()} disabled={saving || maintenance.blocking}>
             {saving ? "保存中…" : "保存"}
           </button>
           {conflictMessage && <button onClick={loadConfig}>再読み込み</button>}
@@ -629,7 +644,7 @@ export default function ConfigForm({ api, onGoToAccountAdd }: { api: ApiClient; 
         <section className="card">
           <p>デーモン未反映の変更があります。</p>
           {daemonMode === "launchd" && (
-            <button onClick={() => void handleRestart()} disabled={restarting}>
+            <button onClick={() => void handleRestart()} disabled={restarting || maintenance.blocking}>
               {restarting ? "再起動中…" : "再起動して適用"}
             </button>
           )}
