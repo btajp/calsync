@@ -6,7 +6,6 @@
     "core:default",
     "core:tray:default",
     "core:image:default",
-    "core:window:allow-create",
     "core:window:allow-show",
     "core:window:allow-hide",
     "core:window:allow-set-position",

@@ -10,7 +10,15 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "calsync", "width": 980, "height": 700 }],
+    "windows": [
+      {
+        "label": "main",
+        "title": "calsync",
+        "width": 980,
+        "height": 700,
+        "backgroundThrottling": "disabled"
+      }
+    ],
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:* ipc: http://ipc.localhost; img-src 'self' data:"
     }

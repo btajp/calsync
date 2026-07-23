@@ -94,7 +94,11 @@ export default function PanelApp() {
   const [days, setDays] = useState<ScheduleDay[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // 起動時に emit("panel-ready") → メインが emitTo("panel", "api-info", {port, token}) で応答する。
+  // 起動時に listen("api-info") の登録が完了してから emit("panel-ready") を発火する
+  // (メインが emitTo("panel", "api-info", {port, token}) で応答する)。順序を逆にすると、
+  // リスナー登録が完了するより先に emit が届いた場合に応答を取りこぼし、「接続中…」のまま
+  // 固まる(レビュー Important 対応。emit/listen は共に非同期 IPC のため、JS の呼び出し順
+  // だけでは到達順序を保証できない)。
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
@@ -106,8 +110,8 @@ export default function PanelApp() {
         return;
       }
       unlisten = u;
+      void emit("panel-ready");
     });
-    void emit("panel-ready");
     return () => {
       cancelled = true;
       unlisten?.();
