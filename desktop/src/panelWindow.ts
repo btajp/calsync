@@ -18,6 +18,32 @@ const BACKGROUND_THROTTLING_DISABLED = "disabled" as BackgroundThrottlingPolicy;
 
 let panelPromise: Promise<WebviewWindow> | null = null;
 
+// トレイ再クリックでのトグル閉じ対応。macOS ではパネル表示中にトレイをクリックすると
+// (1) パネルの blur → hide が先に走り (2) その後に Click イベントが届くため、素朴な
+// 「表示中なら閉じる」判定だけでは (2) で再表示されてしまう。hide 直後の短時間は
+// Click を「閉じる操作の後半」とみなして再表示を抑制する(ポップオーバーの定石)。
+const DISMISS_SUPPRESS_MS = 350;
+let panelShown = false;
+let panelHiddenAt = 0;
+
+function markPanelHidden(): void {
+  panelShown = false;
+  panelHiddenAt = Date.now();
+}
+
+/**
+ * hide 直後のトレイクリックを「トグルで閉じた」として扱うべきかの純粋判定。
+ * now が hiddenAt より過去(時計巻き戻し等)の場合は抑制しない。
+ */
+export function shouldSuppressShow(
+  hiddenAt: number,
+  now: number,
+  thresholdMs: number = DISMISS_SUPPRESS_MS,
+): boolean {
+  const elapsed = now - hiddenAt;
+  return elapsed >= 0 && elapsed < thresholdMs;
+}
+
 async function createPanel(): Promise<WebviewWindow> {
   // dev のホットリロード等で JS 側の状態は失われても OS 側にウィンドウが残っている
   // ケースへの備え。既存があれば新規生成せず再利用する。
@@ -40,7 +66,11 @@ async function createPanel(): Promise<WebviewWindow> {
     void panel.once("tauri://error", (event) => reject(new Error(String(event.payload))));
   });
   // フォーカスが外れたら隠す(デスクトップトレイ設計 2026-07-23 §3.2)。
-  void panel.listen(TauriEvent.WINDOW_BLUR, () => { void panel.hide(); });
+  // markPanelHidden の記録が、直後に届くトレイ Click のトグル判定(shouldSuppressShow)に使われる。
+  void panel.listen(TauriEvent.WINDOW_BLUR, () => {
+    markPanelHidden();
+    void panel.hide();
+  });
   return panel;
 }
 
@@ -75,6 +105,14 @@ async function ensurePanel(): Promise<WebviewWindow> {
 export async function showPanelNearTray(event: TrayIconEvent): Promise<void> {
   if (event.type !== "Click") return;
   const panel = await ensurePanel();
+  // トグル閉じ: 表示中(blur が発火しない経路)ならこのクリックで閉じる。
+  if (panelShown) {
+    markPanelHidden();
+    await panel.hide();
+    return;
+  }
+  // blur → hide 直後のクリックは「閉じる操作」の後半なので再表示しない。
+  if (shouldSuppressShow(panelHiddenAt, Date.now())) return;
   const monitor = await monitorFromPoint(event.rect.position.x, event.rect.position.y);
   const scaleFactor = monitor?.scaleFactor ?? (await panel.scaleFactor());
   const logicalRectPos = event.rect.position.toLogical(scaleFactor);
@@ -85,4 +123,5 @@ export async function showPanelNearTray(event: TrayIconEvent): Promise<void> {
   await panel.setPosition(new LogicalPosition(x, y));
   await panel.show();
   await panel.setFocus();
+  panelShown = true;
 }
