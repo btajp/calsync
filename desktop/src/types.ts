@@ -68,5 +68,7 @@ export interface EventOut {
   all_day_end: string; // 排他的終了日・YYYY-MM-DD(all_day 時、複数日イベントのみ非空)
   meeting_url: string;
   html_link: string;
+  // omitempty のため空文字イベントには含まれないことがある(呼び出し側は "" と同義に扱う)。
+  description?: string;
 }
 export interface EventsResponse { events: EventOut[]; failed: string[] }

@@ -3,6 +3,7 @@ import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { ApiClient, ApiError } from "./api";
 import { colorForAccount } from "./pages/CalendarView";
+import EventDetail from "./components/EventDetail";
 import { formatClock, scheduleFetchRange } from "./tray";
 import type { EventOut } from "./types";
 
@@ -10,6 +11,9 @@ export interface ScheduleItem {
   time: string; // "HH:MM" または終日イベントは "終日"
   title: string;
   accountId: string;
+  // 詳細ビュー(EventDetail)へそのまま渡すための元イベントへの参照
+  // (デスクトップ予定詳細設計 2026-07-24 §3.3)。
+  event: EventOut;
 }
 
 export interface ScheduleDay {
@@ -60,8 +64,8 @@ export function buildScheduleList(events: EventOut[], now: Date): ScheduleDay[] 
     const title = ev.title || "(無題)";
     const date = ev.all_day ? parseLocalDateOnly(ev.all_day_start) : new Date(ev.start);
     const item: SortableItem = ev.all_day
-      ? { time: "終日", title, accountId: ev.account_id, sortKey: -1 }
-      : { time: formatClock(date), title, accountId: ev.account_id, sortKey: date.getTime() };
+      ? { time: "終日", title, accountId: ev.account_id, sortKey: -1, event: ev }
+      : { time: formatClock(date), title, accountId: ev.account_id, sortKey: date.getTime(), event: ev };
 
     const key = localDateKey(date);
     let bucket = days.get(key);
@@ -79,7 +83,7 @@ export function buildScheduleList(events: EventOut[], now: Date): ScheduleDay[] 
       dateLabel: `${bucket.date.getMonth() + 1}/${bucket.date.getDate()}(${WEEKDAY_JA[bucket.date.getDay()]})`,
       items: bucket.items
         .sort((a, b) => a.sortKey - b.sortKey)
-        .map(({ time, title, accountId }) => ({ time, title, accountId })),
+        .map(({ time, title, accountId, event }) => ({ time, title, accountId, event })),
     }));
 }
 
@@ -100,6 +104,9 @@ export default function PanelApp() {
   const [orderedIds, setOrderedIds] = useState<string[]>([]);
   const [days, setDays] = useState<ScheduleDay[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // クリックされたスケジュール項目(詳細ビュー表示中は非 null。デスクトップ予定詳細設計
+  // 2026-07-24 §3.3)。
+  const [selectedItem, setSelectedItem] = useState<ScheduleItem | null>(null);
 
   // 起動時に listen("api-info") の登録が完了してから emit("panel-ready") を発火する
   // (メインが emitTo("panel", "api-info", {port, token}) で応答する)。順序を逆にすると、
@@ -162,6 +169,10 @@ export default function PanelApp() {
     return () => window.removeEventListener("focus", loadEvents);
   }, [loadEvents]);
 
+  // 色分けはアカウント定義順に依存する(CalendarView と同じ規則)。EventDetail の
+  // colorOf props に渡すためのメモ化(orderedIds が変わったときだけ作り直す)。
+  const colorOf = useCallback((accountId: string) => colorForAccount(accountId, orderedIds), [orderedIds]);
+
   const openMain = async () => {
     const main = await WebviewWindow.getByLabel("main");
     await main?.show();
@@ -187,7 +198,16 @@ export default function PanelApp() {
         </button>
       </div>
       {error && <p className="error">{error}</p>}
-      {!api ? (
+      {selectedItem ? (
+        <div className="panel-detail">
+          <EventDetail
+            event={selectedItem.event}
+            colorOf={colorOf}
+            onClose={() => setSelectedItem(null)}
+            closeLabel="← 戻る"
+          />
+        </div>
+      ) : !api ? (
         <p className="hint">接続中…</p>
       ) : days.length === 0 ? (
         <p className="hint">今後7日以内の予定はありません。</p>
@@ -197,11 +217,8 @@ export default function PanelApp() {
             <div key={day.dateKey} className="panel-day">
               <h3>{day.dateLabel}</h3>
               {day.items.map((item, i) => (
-                <div key={i} className="panel-item">
-                  <span
-                    className="legend-chip"
-                    style={{ backgroundColor: colorForAccount(item.accountId, orderedIds) }}
-                  />
+                <div key={i} className="panel-item" onClick={() => setSelectedItem(item)}>
+                  <span className="legend-chip" style={{ backgroundColor: colorOf(item.accountId) }} />
                   <span className="panel-item-time">{item.time}</span>
                   <span className="panel-item-title">{item.title}</span>
                 </div>

@@ -35,6 +35,7 @@ type EventOut struct {
 	AllDayEnd   string   `json:"all_day_end"`   // 排他的終了日・YYYY-MM-DD(AllDay時、複数日イベントのみ非空)
 	MeetingURL  string   `json:"meeting_url"`
 	HTMLLink    string   `json:"html_link"`
+	Description string   `json:"description,omitempty"` // プレーンテキスト(Graph は Prefer text / Google は HTML 除去済み。デスクトップ予定詳細設計 2026-07-24 §2)
 }
 
 // EventsResponse は GET /api/events のレスポンス全体。
@@ -165,6 +166,7 @@ func toEventOut(entries []engine.DigestEntry) []EventOut {
 			AllDayEnd:   en.AllDayEnd,
 			MeetingURL:  en.MeetingURL,
 			HTMLLink:    en.HTMLLink,
+			Description: en.Description,
 		})
 	}
 	return out

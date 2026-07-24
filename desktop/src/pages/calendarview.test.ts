@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { colorForAccount, formatLocalRFC3339, isHttpsUrl, toFullCalendarEvents } from "./CalendarView";
+import { colorForAccount, formatLocalRFC3339, toFullCalendarEvents } from "./CalendarView";
+import { isHttpsUrl } from "../urlSafety";
 import type { EventOut } from "../types";
 
 /** テスト対象の Date に対して、実行環境の Date.getTimezoneOffset() から期待されるオフセット文字列を計算する。 */
@@ -162,17 +163,13 @@ describe("toFullCalendarEvents", () => {
     expect(out.title).toBe("(無題)");
   });
 
-  it("meeting_url/html_link/account_ids を extendedProps に引き継ぐ", () => {
+  it("EventOut 全体を extendedProps.event に引き継ぐ(イベントクリック時にアプリ内詳細モーダルへそのまま渡すため)", () => {
     const ev = baseEvent({
       meeting_url: "https://zoom.us/my/example",
       html_link: "https://calendar.example.com/event",
       account_ids: ["personal", "work-ms"],
     });
     const [out] = toFullCalendarEvents([ev], colorOf);
-    expect(out.extendedProps).toEqual({
-      meetingUrl: "https://zoom.us/my/example",
-      htmlLink: "https://calendar.example.com/event",
-      accountIds: ["personal", "work-ms"],
-    });
+    expect(out.extendedProps).toEqual({ event: ev });
   });
 });
