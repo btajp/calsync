@@ -366,12 +366,18 @@ p.error {
   font-size: 0.8rem;
 }
 
-/* 参加ボタン内のサービス色ドットは凡例チップより小さく丸にする */
-.panel-item-join .legend-chip,
-.event-detail-join .legend-chip {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 50%;
+/* Teams のロゴは Microsoft の商標ポリシー上 simple-icons に収録されておらず、
+   ロゴ再現を避けて頭文字バッジで代替する(components/ServiceIcon.tsx 参照) */
+.service-badge-teams {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #6264a7;
+  color: #ffffff;
+  border-radius: 3px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 1;
 }
 
 /* ポップオーバー内の予定詳細ビュー(デスクトップ予定詳細設計 2026-07-24 §3.3)。

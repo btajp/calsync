@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-shell";
 import { ApiClient, ApiError } from "./api";
 import { colorForAccount } from "./pages/CalendarView";
 import EventDetail from "./components/EventDetail";
+import ServiceIcon from "./components/ServiceIcon";
 import { formatClock, scheduleFetchRange } from "./tray";
 import { isHttpsUrl, meetingService, zoomAppUrl } from "./urlSafety";
 import type { EventOut } from "./types";
@@ -383,9 +384,7 @@ export default function PanelApp() {
                               joinMeeting(item.event.meeting_url);
                             }}
                           >
-                            {joinService && (
-                              <span className="legend-chip" style={{ backgroundColor: joinService.color }} />
-                            )}
+                            {joinService && <ServiceIcon service={joinService} size={12} />}
                             参加
                           </button>
                         )}

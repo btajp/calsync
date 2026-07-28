@@ -209,10 +209,10 @@ describe("deriveEventDetailView", () => {
 });
 
 describe("deriveEventDetailView の参加ボタン表示(サービス判別)", () => {
-  it("Zoom の meeting_url は「Zoom で参加」+ブランド色", () => {
+  it("Zoom の meeting_url は「Zoom で参加」+サービス情報", () => {
     const v = deriveEventDetailView(baseEvent({ meeting_url: "https://example.zoom.us/j/123456789" }));
     expect(v.joinLabel).toBe("Zoom で参加");
-    expect(v.joinColor).toBe("#2d8cff");
+    expect(v.joinService?.key).toBe("zoom");
   });
 
   it("Meet は「Meet で参加」", () => {
@@ -220,9 +220,9 @@ describe("deriveEventDetailView の参加ボタン表示(サービス判別)", (
     expect(v.joinLabel).toBe("Meet で参加");
   });
 
-  it("不明なサービスは「会議に参加」+色なし", () => {
+  it("不明なサービスは「会議に参加」+サービス情報なし", () => {
     const v = deriveEventDetailView(baseEvent({ meeting_url: "https://example.com/conf/1" }));
     expect(v.joinLabel).toBe("会議に参加");
-    expect(v.joinColor).toBeNull();
+    expect(v.joinService).toBeNull();
   });
 });
