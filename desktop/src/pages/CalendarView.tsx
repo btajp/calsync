@@ -253,12 +253,20 @@ function renderTitle(title: string) {
 function renderClusterContent(cluster: EventOut[], colorOf: (accountId: string) => string) {
   const startMs = Date.parse(cluster[0].start) || 0;
   const boxMs = Math.max(...cluster.map((ev) => (Date.parse(ev.end) || startMs) - startMs), 1);
-  const tooltip = cluster.map((ev) => `${ev.title || "(無題)"} ${timeRangeLabel(ev)}`).join("\n");
+  // ツールチップは単独予定と同じく会議 URL も載せる(レビュー指摘: クラスタ化で
+  // ホバーから URL が消えていた)
+  const tooltip = cluster
+    .map((ev) => `${ev.title || "(無題)"} ${timeRangeLabel(ev)}${ev.meeting_url ? `\n  ${ev.meeting_url}` : ""}`)
+    .join("\n");
+  // レールは 4 本まで(5 件以上は N件バッジが頼り)。ガター幅は本数に連動させ、
+  // 3 件以上でレールが行のチップに被らないようにする(レビュー指摘)
+  const railCount = Math.min(cluster.length, 4);
+  const gutter = railCount * 5 + 3;
   return (
-    <div className="fc-calsync-cluster" title={tooltip}>
+    <div className="fc-calsync-cluster" title={tooltip} style={{ paddingLeft: `${gutter}px` }}>
       <span className="fc-calsync-cluster-count">{cluster.length}件</span>
       <span className="fc-calsync-cluster-rails" aria-hidden>
-        {cluster.map((ev, i) => (
+        {cluster.slice(0, railCount).map((ev, i) => (
           <span
             key={i}
             className="fc-calsync-cluster-rail"
@@ -292,7 +300,10 @@ function renderClusterContent(cluster: EventOut[], colorOf: (accountId: string) 
  */
 function renderEventContent(arg: EventContentArg, colorOf: (accountId: string) => string) {
   const props = arg.event.extendedProps as FullCalendarEventInput["extendedProps"];
-  if (props.cluster) {
+  // クラスタの行リスト描画は週/日(timeGrid)限定。月/リストはアカウント色の背景箱が
+  // 無く、白系 rgba の装飾(レール・ディバイダー等)がライトテーマで不可視になるため
+  // (レビュー指摘)、連結タイトル(A / B)の通常描画にフォールバックする
+  if (props.cluster && arg.view.type.startsWith("timeGrid")) {
     return renderClusterContent(props.cluster, colorOf);
   }
   const ev = props.event;
