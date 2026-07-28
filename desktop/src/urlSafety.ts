@@ -35,6 +35,39 @@ export function isHttpsUrl(value: string): boolean {
  * Rust 側 shell open スコープ(tauri.conf.json の plugins.shell.open)でも許可して
  * いる(既定スコープは https/http/mailto/tel のみで zoommtg を拒否する)。
  */
+export interface MeetingService {
+  key: "zoom" | "meet" | "teams" | "webex";
+  label: string; // 表示名(「Zoom で参加」等に使う)
+  color: string; // ブランド近似色(ボタン内のドットに使う。ロゴ画像は商標のため同梱しない)
+}
+
+/**
+ * 会議 URL のホストからサービス種別を判定する純関数(2026-07-28 実機フィードバック:
+ * 参加ボタンにどのサービスかを表示したい)。判定できない場合は null(汎用表示)。
+ */
+export function meetingService(httpsUrl: string): MeetingService | null {
+  let host: string;
+  try {
+    host = new URL(httpsUrl).hostname;
+  } catch {
+    return null;
+  }
+  const is = (base: string) => host === base || host.endsWith(`.${base}`);
+  if (is("zoom.us") || is("zoomgov.com")) {
+    return { key: "zoom", label: "Zoom", color: "#2d8cff" };
+  }
+  if (host === "meet.google.com") {
+    return { key: "meet", label: "Meet", color: "#00ac47" };
+  }
+  if (is("teams.microsoft.com") || is("teams.live.com")) {
+    return { key: "teams", label: "Teams", color: "#6264a7" };
+  }
+  if (is("webex.com")) {
+    return { key: "webex", label: "Webex", color: "#00bceb" };
+  }
+  return null;
+}
+
 export function zoomAppUrl(httpsUrl: string): string | null {
   let u: URL;
   try {

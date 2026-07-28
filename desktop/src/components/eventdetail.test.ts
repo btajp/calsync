@@ -207,3 +207,22 @@ describe("deriveEventDetailView", () => {
     expect(segs.every((s) => s.type === "text")).toBe(true);
   });
 });
+
+describe("deriveEventDetailView の参加ボタン表示(サービス判別)", () => {
+  it("Zoom の meeting_url は「Zoom で参加」+ブランド色", () => {
+    const v = deriveEventDetailView(baseEvent({ meeting_url: "https://example.zoom.us/j/123456789" }));
+    expect(v.joinLabel).toBe("Zoom で参加");
+    expect(v.joinColor).toBe("#2d8cff");
+  });
+
+  it("Meet は「Meet で参加」", () => {
+    const v = deriveEventDetailView(baseEvent({ meeting_url: "https://meet.google.com/abc-defg-hij" }));
+    expect(v.joinLabel).toBe("Meet で参加");
+  });
+
+  it("不明なサービスは「会議に参加」+色なし", () => {
+    const v = deriveEventDetailView(baseEvent({ meeting_url: "https://example.com/conf/1" }));
+    expect(v.joinLabel).toBe("会議に参加");
+    expect(v.joinColor).toBeNull();
+  });
+});

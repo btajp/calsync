@@ -359,8 +359,19 @@ p.error {
    タイトルが長くても右端に固定されるよう flex-shrink を切る。 */
 .panel-item-join {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   padding: 0.1rem 0.5rem;
   font-size: 0.8rem;
+}
+
+/* 参加ボタン内のサービス色ドットは凡例チップより小さく丸にする */
+.panel-item-join .legend-chip,
+.event-detail-join .legend-chip {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
 }
 
 /* ポップオーバー内の予定詳細ビュー(デスクトップ予定詳細設計 2026-07-24 §3.3)。
@@ -447,6 +458,9 @@ p.error {
 
 .event-detail-join {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   white-space: nowrap;
 }
 
@@ -500,6 +514,48 @@ p.error {
   border-radius: 999px;
   padding: 0.05rem 0.5rem;
   font-weight: 600;
+}
+
+/* 現在時刻ライン(nowIndicator)の Google カレンダー風強化(2026-07-28 実機
+   フィードバック: 1px では見えにくい)。today 列は 2px の実線+左端に丸ドット、
+   週全体には半透明の細ラインを重ねる。
+   実装メモ(@fullcalendar/timegrid の実 CSS を確認済み):
+   - ラインの親 .fc-timegrid-now-indicator-container は overflow: hidden のため、
+     ドット(左へはみ出す)と週全体ライン(±100vw)を描くには visible が必要。
+     コンテナの子は now ライン系のみなので他要素への影響は無い
+   - 週全体ラインは ::after を ±100vw に伸ばし、祖先の .fc-scroller のクリップで
+     グリッド表示幅に収める(時刻軸の上にも薄く乗るが Google も同様の見た目)
+   - 既定の左右の小さな三角矢印はドットと重複するため非表示にする */
+.fc .fc-timegrid-now-indicator-container {
+  overflow: visible;
+}
+
+.fc .fc-timegrid-now-indicator-line {
+  border-top-width: 2px;
+}
+
+.fc .fc-timegrid-now-indicator-line::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: -5px; /* 実線(2px・top:0〜2)の中心 y=1 にドット(12px)の中心を合わせる */
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--fc-now-indicator-color);
+}
+
+.fc .fc-timegrid-now-indicator-line::after {
+  content: "";
+  position: absolute;
+  left: -100vw;
+  right: -100vw;
+  top: 0; /* 実線と同じ縦位置(today 列では実線の上に重なるが同色系なので実害なし) */
+  border-top: 2px solid rgba(234, 67, 53, 0.3);
+}
+
+.fc .fc-timegrid-now-indicator-arrow {
+  display: none;
 }
 
 /* 「今日」ジャンプボタン: 押せる状態(今日が表示範囲外)のとき目立たせる */

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-shell";
-import { isHttpsUrl, zoomAppUrl } from "../urlSafety";
+import { isHttpsUrl, meetingService, zoomAppUrl } from "../urlSafety";
 import type { EventOut } from "../types";
 
 export interface DescriptionSegment {
@@ -126,6 +126,8 @@ export interface EventDetailView {
   accountIds: string[];
   descriptionSegments: DescriptionSegment[];
   showJoinButton: boolean; // meeting_url があり、かつ https のときのみ
+  joinLabel: string; // サービス判別できれば「Zoom で参加」等、できなければ「会議に参加」
+  joinColor: string | null; // サービスのブランド近似色(ボタン内ドット用)。不明は null
   showCalendarLink: boolean; // html_link があり、かつ https のときのみ
 }
 
@@ -135,7 +137,12 @@ export interface EventDetailView {
  * ため、レンダリング結果ではなくこの関数の戻り値で表示条件を検証する)。
  */
 export function deriveEventDetailView(event: EventOut): EventDetailView {
+  // 参加ボタンにどのサービスの会議かを表示する(2026-07-28 実機フィードバック)。
+  // ロゴ画像は商標のため同梱せず、ブランド近似色のドット+サービス名で示す。
+  const service = isHttpsUrl(event.meeting_url) ? meetingService(event.meeting_url) : null;
   return {
+    joinLabel: service ? `${service.label} で参加` : "会議に参加",
+    joinColor: service?.color ?? null,
     title: event.title || "(無題)",
     dateTimeLabel: formatEventDateTime(event),
     accountIds: event.account_ids.length > 0 ? event.account_ids : [event.account_id],
@@ -200,7 +207,8 @@ export default function EventDetail({
         <h2>{view.title}</h2>
         {view.showJoinButton && (
           <button className="event-detail-join" onClick={() => openMeeting(event.meeting_url)}>
-            会議に参加
+            {view.joinColor && <span className="legend-chip" style={{ backgroundColor: view.joinColor }} />}
+            {view.joinLabel}
           </button>
         )}
       </div>
