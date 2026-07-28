@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { colorForAccount, formatLocalRFC3339, toFullCalendarEvents, compactOverlapLefts } from "./CalendarView";
+import { colorForAccount, formatLocalRFC3339, toFullCalendarEvents, compactOverlapLefts, clusterSameStart, splitTitlePrefix } from "./CalendarView";
 import { isHttpsUrl } from "../urlSafety";
 import type { EventOut } from "../types";
 
@@ -259,5 +259,88 @@ describe("compactOverlapLefts", () => {
       { top: 200, level: 1, left: 50 },
     ];
     expect(compactOverlapLefts(items)).toEqual([null, 5]);
+  });
+});
+
+describe("splitTitlePrefix", () => {
+  it("先頭の【…】を接頭辞として分離する", () => {
+    expect(splitTitlePrefix("【社内】ISMS文書レビュー定例")).toEqual({
+      prefix: "社内",
+      rest: "ISMS文書レビュー定例",
+    });
+  });
+
+  it("接頭辞の後の空白は捨てる", () => {
+    expect(splitTitlePrefix("【社外】 A社 月次定例会")).toEqual({ prefix: "社外", rest: "A社 月次定例会" });
+  });
+
+  it("接頭辞が無ければそのまま", () => {
+    expect(splitTitlePrefix("週次定例")).toEqual({ prefix: null, rest: "週次定例" });
+  });
+
+  it("接頭辞しかないタイトルは触らない", () => {
+    expect(splitTitlePrefix("【社内】")).toEqual({ prefix: null, rest: "【社内】" });
+  });
+
+  it("8 文字を超える【…】は接頭辞とみなさない", () => {
+    const t = "【これは九文字あります】本文";
+    expect(splitTitlePrefix(t)).toEqual({ prefix: null, rest: t });
+  });
+});
+
+describe("clusterSameStart", () => {
+  it("同時開始の時刻あり予定を 1 つのクラスタに束ねる(終了が遅い順)", () => {
+    const a = baseEvent({ title: "短い方", end: "2026-07-21T10:30:00+09:00" });
+    const b = baseEvent({ title: "長い方", end: "2026-07-21T11:00:00+09:00", account_id: "work-ms" });
+    const out = clusterSameStart([a, b]);
+    expect(out).toHaveLength(1);
+    expect(Array.isArray(out[0])).toBe(true);
+    expect((out[0] as EventOut[]).map((e) => e.title)).toEqual(["長い方", "短い方"]);
+  });
+
+  it("開始が違う予定・終日はそのまま(単独)", () => {
+    const a = baseEvent({ title: "A" });
+    const b = baseEvent({ title: "B", start: "2026-07-21T12:00:00+09:00", end: "2026-07-21T13:00:00+09:00" });
+    const allDay = baseEvent({ title: "終日", all_day: true, all_day_start: "2026-07-21", start: "", end: "" });
+    const out = clusterSameStart([a, b, allDay]);
+    expect(out).toEqual([a, b, allDay]);
+  });
+
+  it("同一時刻でも表記(オフセット)が違えば同じクラスタになる(instant 比較)", () => {
+    const a = baseEvent({ title: "JST表記" });
+    const b = baseEvent({ title: "UTC表記", start: "2026-07-21T01:00:00Z", end: "2026-07-21T02:00:00Z" });
+    const out = clusterSameStart([a, b]);
+    expect(out).toHaveLength(1);
+    expect(Array.isArray(out[0])).toBe(true);
+  });
+
+  it("クラスタは先頭要素の位置に 1 回だけ現れ、他の予定の順序は保たれる", () => {
+    const x = baseEvent({ title: "先頭", start: "2026-07-21T09:00:00+09:00", end: "2026-07-21T09:30:00+09:00" });
+    const a = baseEvent({ title: "同時A" });
+    const y = baseEvent({ title: "間", start: "2026-07-21T10:30:00+09:00", end: "2026-07-21T10:45:00+09:00" });
+    const b = baseEvent({ title: "同時B" });
+    const out = clusterSameStart([x, a, y, b]);
+    expect(out.map((o) => (Array.isArray(o) ? "cluster" : o.title))).toEqual(["先頭", "cluster", "間"]);
+  });
+});
+
+describe("toFullCalendarEvents(クラスタ)", () => {
+  const colorOf2 = (id: string) => (id === "personal" ? "#4285F4" : "#999999");
+
+  it("同時開始グループは 1 つの合成イベントになり、end は最も遅い終了", () => {
+    const a = baseEvent({ title: "短い方", end: "2026-07-21T10:30:00+09:00" });
+    const b = baseEvent({ title: "長い方", end: "2026-07-21T11:00:00+09:00" });
+    const out = toFullCalendarEvents([a, b], colorOf2);
+    expect(out).toHaveLength(1);
+    expect(out[0].extendedProps.cluster).toHaveLength(2);
+    expect(out[0].end).toBe("2026-07-21T11:00:00+09:00");
+    expect(out[0].title).toBe("長い方 / 短い方");
+    expect(out[0].extendedProps.event.title).toBe("長い方");
+  });
+
+  it("単独予定の変換は従来どおり(cluster なし)", () => {
+    const [out] = toFullCalendarEvents([baseEvent()], colorOf2);
+    expect(out.extendedProps.cluster).toBeUndefined();
+    expect(out.extendedProps.event.title).toBe("定例MTG");
   });
 });

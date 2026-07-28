@@ -72,6 +72,9 @@ appserver がプロバイダを構築する際、**リフレッシュしない�
 - 描画規則(2026-07-29 実機フィードバック反映): 予定枠に収まらない文字はクリップ(`.fc-timegrid-event { overflow: hidden }`)し、全文はホバーの title 属性(タイトル+会議 URL)とクリックの詳細モーダルで見せる。被っている予定は harness の right を `0 !important` で上書きして列右端まで伸ばし、FullCalendar のインライン z-index による Google 風カスケードにする(長時間ブロックと重なる予定が半分以下に潰れるのを防ぐ)
 - 重なりの左インセット圧縮(同日 2 回目のフィードバック): 純関数 `compactOverlapLefts` が「1 段 = 5%」へ詰め替える。段数は FullCalendar が harness の inline z-index に入れる stackDepth+1 から読む。**開始位置(top ±3px)が同じ予定同士は FullCalendar の横並びを維持**(詰めると後の予定が前をほぼ完全に覆うため。Google も同時開始は横並び)。DOM への適用は datesSet / events 変化 / resize 後の rAF で再実行(FullCalendar の再レンダリングがインライン style を戻すため)
 - 週ビューはタイトル先頭+時刻範囲を後置(幅が足りなければ末尾からクリップ — 表示できるときは終了時刻も見せる。0.5.5 の開始のみ表示は 0.5.6 で範囲に戻した)。30 分予定の最初の 1 行が「時刻だけ」になるのを防ぐ。月/リストは時刻先頭のまま。スロット高さは 2em(既定 1.5em)
+- 同時開始クラスタのリスト箱(2026-07-29 同時刻表示検討・案1、0.6.0): `clusterSameStart` が同一 instant 開始の時刻あり予定を束ね、`toFullCalendarEvents` が 1 つの合成イベント(end = 最遅終了、extendedProps.cluster)に変換。描画は「1 行 = 1 予定(折り返さない)」の全幅行リスト+「N件」バッジ+行間ディバイダー+左端レール(本数=件数、高さ=長さ比)。行クリックは eventClick 内で data-cluster-index を closest 検索して該当予定の詳細を開く(FullCalendar のネイティブ eventClick が先に発火するため行側 stopPropagation では二重発火を防げない)。行順は終了の遅い順→タイトル昇順
+- タイトル正規化(案4、0.6.0): `splitTitlePrefix` が先頭の【…】(8 文字以内・接頭辞のみのタイトルは除外)をチップ化。週ビューの単独予定とクラスタ行に適用
+- ホバー全幅展開(案3、0.6.0): `:hover` の CSS のみで harness を left:0 !important・z-index 60 に、イベント本体を height:auto に展開して全文を見せる。重なり詰めの inline left は !important を付けない(この :hover が勝てるように)
 
 ## 6. スコープ外
 
