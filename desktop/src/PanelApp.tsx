@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { open } from "@tauri-apps/plugin-shell";
 import { ApiClient, ApiError } from "./api";
 import { colorForAccount } from "./pages/CalendarView";
 import EventDetail from "./components/EventDetail";
 import { formatClock, scheduleFetchRange } from "./tray";
+import { isHttpsUrl } from "./urlSafety";
 import type { EventOut } from "./types";
 
 export interface ScheduleItem {
@@ -122,6 +124,17 @@ export default function PanelApp() {
   // クリックされたスケジュール項目(詳細ビュー表示中は非 null。デスクトップ予定詳細設計
   // 2026-07-24 §3.3)。
   const [selectedItem, setSelectedItem] = useState<ScheduleItem | null>(null);
+  // リスト行の「参加」ボタンで会議 URL を開けなかったときのエラー(2026-07-28
+  // 実機フィードバック: 詳細を開かずに参加したい)。
+  const [joinError, setJoinError] = useState<string | null>(null);
+
+  // 詳細を開かずにリスト行から直接会議へ参加する。https 以外はボタン自体を出さない
+  // (EventDetail.showJoinButton と同じ方針)ため、ここでの再チェックは防御的。
+  const joinMeeting = (url: string) => {
+    if (!isHttpsUrl(url)) return;
+    setJoinError(null);
+    open(url).catch((e) => setJoinError(e instanceof Error ? e.message : String(e)));
+  };
 
   // 起動時に listen("api-info") の登録が完了してから emit("panel-ready") を発火する
   // (メインが emitTo("panel", "api-info", {port, token}) で応答する)。順序を逆にすると、
@@ -245,6 +258,7 @@ export default function PanelApp() {
         </button>
       </div>
       {error && <p className="error">{error}</p>}
+      {joinError && <p className="error">開けませんでした: {joinError}</p>}
       {selectedItem ? (
         <div className="panel-detail">
           <EventDetail
@@ -273,6 +287,18 @@ export default function PanelApp() {
                   <span className="legend-chip" style={{ backgroundColor: colorOf(item.accountId) }} />
                   <span className="panel-item-time">{item.time}</span>
                   <span className="panel-item-title">{item.title}</span>
+                  {isHttpsUrl(item.event.meeting_url) && (
+                    <button
+                      className="panel-item-join"
+                      onClick={(e) => {
+                        // 行クリック(詳細ビューへの遷移)と分離する
+                        e.stopPropagation();
+                        joinMeeting(item.event.meeting_url);
+                      }}
+                    >
+                      参加
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

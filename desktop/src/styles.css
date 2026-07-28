@@ -349,9 +349,18 @@ p.error {
 }
 
 .panel-item-title {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* リスト行の「参加」ボタン(2026-07-28 実機フィードバック: 詳細を開かずに参加)。
+   タイトルが長くても右端に固定されるよう flex-shrink を切る。 */
+.panel-item-join {
+  flex-shrink: 0;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.8rem;
 }
 
 /* ポップオーバー内の予定詳細ビュー(デスクトップ予定詳細設計 2026-07-24 §3.3)。
