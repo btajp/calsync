@@ -71,4 +71,10 @@ export interface EventOut {
   // omitempty のため空文字イベントには含まれないことがある(呼び出し側は "" と同義に扱う)。
   description?: string;
 }
-export interface EventsResponse { events: EventOut[]; failed: string[] }
+export interface EventsResponse {
+  events: EventOut[];
+  failed: string[];
+  // appserver が期限切れキャッシュを stale-while-revalidate で即返したとき true。
+  // バックグラウンドで最新化が進行中なので、受け取り側は少し後に 1 回だけ再取得する。
+  stale?: boolean;
+}

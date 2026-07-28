@@ -6,8 +6,10 @@ import (
 	"log"
 	"slices"
 	"sort"
+	"sync"
 	"time"
 
+	"github.com/btajp/calsync/internal/config"
 	"github.com/btajp/calsync/internal/model"
 	"github.com/btajp/calsync/internal/notify"
 )
@@ -93,57 +95,86 @@ func (e *Engine) CollectWindow(ctx context.Context, w model.Window) ([]DigestEnt
 	winStartDate := w.Start.Format("2006-01-02")
 	winEndDateInclusive := w.End.AddDate(0, 0, -1).Format("2006-01-02")
 
+	// アカウント間の取得はネットワーク I/O が支配的なため並列に行う(2026-07-28。
+	// デスクトップアプリの体感速度対策)。dedupe(appendDigestEntry)の「設定順で
+	// 最初の非空を採用」という決定的規則を保つため、並列なのは取得だけで、マージは
+	// 全取得完了後に設定順の単一ループで行う。Store(*sql.DB)は並行クエリ安全、
+	// プロバイダはアカウントごとに別インスタンスなので共有状態は results の自分の
+	// スロットのみ。
+	results := make([]acctWindowResult, len(e.Cfg.Accounts))
+	var wg sync.WaitGroup
+	for i := range e.Cfg.Accounts {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i] = e.collectAccountWindow(ctx, e.Cfg.Accounts[i], w, winStartDate, winEndDateInclusive)
+		}(i)
+	}
+	wg.Wait()
+
 	var (
 		entries []DigestEntry
 		failed  []string
 	)
 	byKey := make(map[string]int)
-	for _, acct := range e.Cfg.Accounts {
-		acctFailed := false
-		p, err := e.providerFor(acct.ID)
-		if err != nil {
-			log.Printf("collect window %s: %v", acct.ID, err)
+	for i, acct := range e.Cfg.Accounts {
+		if results[i].failed {
 			failed = append(failed, acct.ID)
 			continue
 		}
-		// digest_calendars は監視対象(Calendars)には含まれない通知専用カレンダー。
-		// ライブ取得にだけ acct.Calendars の後ろに連結して参加させる
-		// (フィルタ・dedupe・failed 集約は既存のループをそのまま流用する。スペック 2 章)。
-		digestCalIDs := make([]string, 0, len(acct.Calendars)+len(acct.DigestCalendars))
-		digestCalIDs = append(digestCalIDs, acct.Calendars...)
-		digestCalIDs = append(digestCalIDs, acct.DigestCalendars...)
-		for _, calID := range digestCalIDs {
-			if ctx.Err() != nil {
-				return entries, failed
-			}
-			ref := model.CalendarRef{AccountID: acct.ID, CalendarID: calID}
-			evs, _, err := p.Changes(ctx, ref, "", w)
-			if err != nil {
-				log.Printf("collect window %s: %v", ref, err)
-				acctFailed = true
-				break
-			}
-			for _, ev := range evs {
-				include, err := e.windowIncludes(ref, ev, w, winStartDate, winEndDateInclusive)
-				if err != nil {
-					log.Printf("collect window %s: %v", ref, err)
-					acctFailed = true
-					break
-				}
-				if include {
-					e.appendDigestEntry(&entries, byKey, acct.ID, ev)
-				}
-			}
-			if acctFailed {
-				break
-			}
-		}
-		if acctFailed {
-			failed = append(failed, acct.ID)
+		for _, ev := range results[i].included {
+			e.appendDigestEntry(&entries, byKey, acct.ID, ev)
 		}
 	}
 	sortDigestEntries(entries)
 	return entries, failed
+}
+
+// acctWindowResult は collectAccountWindow の 1 アカウント分の結果。
+type acctWindowResult struct {
+	included []model.NormalizedEvent // windowIncludes を通過した表示対象イベント(カレンダー順)
+	failed   bool
+}
+
+// collectAccountWindow は 1 アカウントの全カレンダーを順に取得し、窓に含まれる
+// イベントを返す(CollectWindow の並列取得ワーカー。アカウント内は従来どおり直列)。
+// ctx キャンセル時はそこまでの部分結果を返す(failed にはしない — レスポンス自体が
+// 使われないため)。
+func (e *Engine) collectAccountWindow(ctx context.Context, acct config.Account, w model.Window, winStartDate, winEndDateInclusive string) acctWindowResult {
+	p, err := e.providerFor(acct.ID)
+	if err != nil {
+		log.Printf("collect window %s: %v", acct.ID, err)
+		return acctWindowResult{failed: true}
+	}
+	// digest_calendars は監視対象(Calendars)には含まれない通知専用カレンダー。
+	// ライブ取得にだけ acct.Calendars の後ろに連結して参加させる
+	// (フィルタ・dedupe・failed 集約は既存のループをそのまま流用する。スペック 2 章)。
+	digestCalIDs := make([]string, 0, len(acct.Calendars)+len(acct.DigestCalendars))
+	digestCalIDs = append(digestCalIDs, acct.Calendars...)
+	digestCalIDs = append(digestCalIDs, acct.DigestCalendars...)
+	var res acctWindowResult
+	for _, calID := range digestCalIDs {
+		if ctx.Err() != nil {
+			return res
+		}
+		ref := model.CalendarRef{AccountID: acct.ID, CalendarID: calID}
+		evs, _, err := p.Changes(ctx, ref, "", w)
+		if err != nil {
+			log.Printf("collect window %s: %v", ref, err)
+			return acctWindowResult{failed: true}
+		}
+		for _, ev := range evs {
+			include, err := e.windowIncludes(ref, ev, w, winStartDate, winEndDateInclusive)
+			if err != nil {
+				log.Printf("collect window %s: %v", ref, err)
+				return acctWindowResult{failed: true}
+			}
+			if include {
+				res.included = append(res.included, ev)
+			}
+		}
+	}
+	return res
 }
 
 // windowIncludes は 1 イベントが窓 w の対象かを判定する(旧 digestIncludes の一般化。

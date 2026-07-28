@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/btajp/calsync/internal/model"
+	"github.com/btajp/calsync/internal/provider"
 	"github.com/btajp/calsync/internal/store"
 )
 
@@ -132,4 +133,47 @@ func TestCollectWindowThreadsAllDayEndToDigestEntry(t *testing.T) {
 	require.Len(t, entries, 1)
 	require.Equal(t, "2026-07-04", entries[0].AllDayStart)
 	require.Equal(t, "2026-07-07", entries[0].AllDayEnd)
+}
+
+// delayedProvider は Changes を遅延させるラッパー(CollectWindow の並列取得でも
+// マージが設定順で決定的なことを検証するため。2026-07-28 並列化)。
+type delayedProvider struct {
+	provider.Provider
+	delay time.Duration
+}
+
+func (d delayedProvider) Changes(ctx context.Context, cal model.CalendarRef, cursor string, w model.Window) ([]model.NormalizedEvent, string, error) {
+	time.Sleep(d.delay)
+	return d.Provider.Changes(ctx, cal, cursor, w)
+}
+
+// TestCollectWindowParallelMergeIsDeterministic は、アカウント間の取得が並列でも
+// dedupe 統合の由来アカウント順(AccountIDs)が設定順のままであることを検証する。
+// 設定順で先頭の "a" をわざと遅らせ、"b" が先に完了しても結果が変わらないこと。
+func TestCollectWindowParallelMergeIsDeterministic(t *testing.T) {
+	e, f := newTestEngine(t)
+	e.Providers = map[string]provider.Provider{
+		"a": delayedProvider{Provider: f, delay: 50 * time.Millisecond},
+		"b": f,
+		"c": f,
+	}
+	winStart := time.Date(2026, 7, 5, 0, 0, 0, 0, jstLoc)
+	winEnd := time.Date(2026, 7, 8, 0, 0, 0, 0, jstLoc)
+
+	shared := func(id, title string) model.NormalizedEvent {
+		return model.NormalizedEvent{
+			ID: id, ICalUID: "meet@x", Title: title,
+			StartUTC: time.Date(2026, 7, 6, 1, 0, 0, 0, time.UTC),
+			EndUTC:   time.Date(2026, 7, 6, 2, 0, 0, 0, time.UTC),
+			IsBusy:   true,
+		}
+	}
+	f.SetFullState(refA, []model.NormalizedEvent{shared("ev-a", "会議(aのコピー)")})
+	f.SetFullState(model.CalendarRef{AccountID: "b", CalendarID: "primary"}, []model.NormalizedEvent{shared("ev-b", "会議(bのコピー)")})
+	f.SetFullState(model.CalendarRef{AccountID: "c", CalendarID: "primary"}, nil)
+
+	entries, failed := e.CollectWindow(context.Background(), model.Window{Start: winStart, End: winEnd})
+	require.Empty(t, failed)
+	require.Len(t, entries, 1, "dedupe_same_meeting で 1 件に統合される")
+	require.Equal(t, []string{"a", "b"}, entries[0].AccountIDs, "由来アカウント順は取得の完了順ではなく設定順")
 }

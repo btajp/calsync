@@ -480,3 +480,56 @@ p.error {
   text-decoration: underline;
   cursor: pointer;
 }
+
+/* ===== 現在時刻・今日の強調(2026-07-28 実機フィードバック) ===== */
+
+/* カレンダータブ: 今日の背景の強調(FullCalendar の既定の淡黄色は視認性が弱い) */
+.fc {
+  --fc-today-bg-color: rgba(66, 133, 244, 0.12);
+}
+
+/* 今日の日付ラベルをピル型で強調(週ビューの列見出し・月ビューの日付番号) */
+.fc .fc-col-header-cell.fc-day-today .fc-col-header-cell-cushion,
+.fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number {
+  background: #4285f4;
+  color: #ffffff;
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  font-weight: 600;
+}
+
+/* 現在時刻ライン(nowIndicator)の色を明示(赤系で統一) */
+.fc .fc-timegrid-now-indicator-line {
+  border-color: #ea4335;
+}
+
+.fc .fc-timegrid-now-indicator-arrow {
+  border-color: #ea4335;
+}
+
+/* 「今日」ジャンプボタン: 押せる状態(今日が表示範囲外)のとき目立たせる */
+.fc .fc-today-button:not(:disabled) {
+  background: #4285f4;
+  border-color: #4285f4;
+  color: #ffffff;
+  font-weight: 600;
+  opacity: 1;
+}
+
+/* ポップオーバー: 今日のグループ内の「現在時刻」水平線(左端の丸+線) */
+.panel-now-line {
+  position: relative;
+  border-top: 2px solid #ea4335;
+  margin: 0.15rem 0;
+}
+
+.panel-now-line::before {
+  content: "";
+  position: absolute;
+  left: -2px;
+  top: -5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ea4335;
+}
