@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveEventDetailView, formatEventDateTime, linkifyDescription } from "./EventDetail";
+import { deriveEventDetailView, formatEventDateTime, linkifyDescription, trimUrlTail } from "./EventDetail";
 import type { EventOut } from "../types";
 
 function baseEvent(overrides: Partial<EventOut> = {}): EventOut {
@@ -71,6 +71,57 @@ describe("linkifyDescription", () => {
       { type: "text", value: "\n3行目" },
     ]);
   });
+
+  it("URL 直後に空白なしで日本語が続く場合、日本語を URL に取り込まない", () => {
+    expect(linkifyDescription("詳細はhttps://example.com/docを参照")).toEqual([
+      { type: "text", value: "詳細は" },
+      { type: "link", value: "https://example.com/doc" },
+      { type: "text", value: "を参照" },
+    ]);
+  });
+
+  it("全角約物(。」)は URL に取り込まない", () => {
+    expect(linkifyDescription("https://example.com/doc。次の行")).toEqual([
+      { type: "link", value: "https://example.com/doc" },
+      { type: "text", value: "。次の行" },
+    ]);
+  });
+
+  it("半角括弧で包まれた URL は閉じ括弧を URL に取り込まない", () => {
+    expect(linkifyDescription("資料(https://example.com/doc)を確認")).toEqual([
+      { type: "text", value: "資料(" },
+      { type: "link", value: "https://example.com/doc" },
+      { type: "text", value: ")を確認" },
+    ]);
+  });
+
+  it("文末の半角ピリオド・カンマは URL に取り込まない", () => {
+    expect(linkifyDescription("See https://example.com/doc, then https://example.com/next.")).toEqual([
+      { type: "text", value: "See " },
+      { type: "link", value: "https://example.com/doc" },
+      { type: "text", value: ", then " },
+      { type: "link", value: "https://example.com/next" },
+      { type: "text", value: "." },
+    ]);
+  });
+
+  it("<URL> 形式の閉じ山括弧は URL に取り込まない", () => {
+    expect(linkifyDescription("<https://example.com/doc>")).toEqual([
+      { type: "text", value: "<" },
+      { type: "link", value: "https://example.com/doc" },
+      { type: "text", value: ">" },
+    ]);
+  });
+});
+
+describe("trimUrlTail", () => {
+  it("URL 内で対応が取れた閉じ丸括弧は残す(Wikipedia 型パス)", () => {
+    expect(trimUrlTail("https://en.wikipedia.org/wiki/Foo_(bar)")).toBe("https://en.wikipedia.org/wiki/Foo_(bar)");
+  });
+
+  it("対応の取れない閉じ丸括弧・末尾約物は連続して落とす", () => {
+    expect(trimUrlTail("https://example.com/doc).")).toBe("https://example.com/doc");
+  });
 });
 
 describe("formatEventDateTime", () => {
@@ -139,5 +190,20 @@ describe("deriveEventDetailView", () => {
       { type: "text", value: "議事録: " },
       { type: "link", value: "https://example.com/notes" },
     ]);
+  });
+
+  it("http の URL は text に降格する(開けないリンクの見た目を作らない)", () => {
+    const ev = baseEvent({ description: "旧wiki: http://example.com/wiki" });
+    expect(deriveEventDetailView(ev).descriptionSegments).toEqual([
+      { type: "text", value: "旧wiki: " },
+      { type: "text", value: "http://example.com/wiki" },
+    ]);
+  });
+
+  it("URL としてパースできない link セグメントも text に降格する", () => {
+    // トリム後に "https://" だけが残るような入力(new URL が失敗する)
+    const ev = baseEvent({ description: "空リンク https://, 以上" });
+    const segs = deriveEventDetailView(ev).descriptionSegments;
+    expect(segs.every((s) => s.type === "text")).toBe(true);
   });
 });

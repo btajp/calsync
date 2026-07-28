@@ -9,10 +9,39 @@ export interface DescriptionSegment {
 }
 
 // http/https のみを URL として抽出する(デスクトップ予定詳細設計 2026-07-24 §3.1・§4)。
-// mailto: 等の他スキームはリンク化しない(isHttpsUrl 側で https のみ実際に開くため、
-// ここで http まで拾っておいても実害は無いが、抽出自体を http/https に絞ることで
-// リンク化の対象を予測可能にする)。
-const URL_PATTERN = /https?:\/\/[^\s]+/g;
+// mailto: 等の他スキームはリンク化しない。文字クラスは RFC 3986 の URL 構成文字に限定する
+// ([^\s]+ だと「詳細はhttps://example.com/docを参照」のような日本語説明文で URL 直後の
+// 地の文まで丸ごと URL に取り込んでしまう)。日本語・全角約物・<> はクラス外なので自然に
+// 終端する。IPv6 ホストの [] は説明文では実質使われず、末尾 ] の誤取り込みの害が大きい
+// ため含めない。
+const URL_PATTERN = /https?:\/\/[A-Za-z0-9\-._~:/?#@!$&'()*+,;=%]+/g;
+
+/**
+ * URL 末尾に食い込みがちな半角約物を落とす純関数。「URL, 続き」「(URL)」のような
+ * 文中利用で末尾の , . ) 等が URL に含まれてしまうのを防ぐ。閉じ丸括弧は URL 内で
+ * 対応が取れている場合のみ残す(Wikipedia 等の「/wiki/Foo_(bar)」を壊さない)。
+ */
+export function trimUrlTail(url: string): string {
+  let u = url;
+  for (;;) {
+    const last = u[u.length - 1];
+    if (last === ")") {
+      const opens = (u.match(/\(/g) ?? []).length;
+      const closes = (u.match(/\)/g) ?? []).length;
+      if (closes > opens) {
+        u = u.slice(0, -1);
+        continue;
+      }
+      break;
+    }
+    if (last && ".,;:!?'".includes(last)) {
+      u = u.slice(0, -1);
+      continue;
+    }
+    break;
+  }
+  return u;
+}
 
 /**
  * 説明文(プレーンテキスト)を「地の文」と「URL」に分割する純関数。
@@ -27,8 +56,10 @@ export function linkifyDescription(text: string): DescriptionSegment[] {
     if (start > lastIndex) {
       segments.push({ type: "text", value: text.slice(lastIndex, start) });
     }
-    segments.push({ type: "link", value: match[0] });
-    lastIndex = start + match[0].length;
+    // 末尾トリムで削れた分は次の text セグメントに戻る(lastIndex をトリム後の長さで進める)。
+    const url = trimUrlTail(match[0]);
+    segments.push({ type: "link", value: url });
+    lastIndex = start + url.length;
   }
   if (lastIndex < text.length) {
     segments.push({ type: "text", value: text.slice(lastIndex) });
@@ -108,7 +139,13 @@ export function deriveEventDetailView(event: EventOut): EventDetailView {
     title: event.title || "(無題)",
     dateTimeLabel: formatEventDateTime(event),
     accountIds: event.account_ids.length > 0 ? event.account_ids : [event.account_id],
-    descriptionSegments: linkifyDescription(event.description ?? ""),
+    // https として開けない link セグメント(http URL・パース不能な文字列)は text に
+    // 降格する。openHttps は https 以外を無言で拒否するため、降格しないと「リンクの
+    // 見た目なのにクリックしても何も起きない」要素ができてしまう(会議ボタンが http の
+    // とき非表示になるのと同じ方針)。
+    descriptionSegments: linkifyDescription(event.description ?? "").map((seg) =>
+      seg.type === "link" && !isHttpsUrl(seg.value) ? { type: "text" as const, value: seg.value } : seg,
+    ),
     showJoinButton: isHttpsUrl(event.meeting_url),
     showCalendarLink: isHttpsUrl(event.html_link),
   };

@@ -134,6 +134,11 @@ export default function CalendarView({ api }: { api: ApiClient }) {
   const [fetchError, setFetchError] = useState<string | null>(null);
   // クリックされた予定(モーダル表示中は非 null。デスクトップ予定詳細設計 2026-07-24 §3.2)。
   const [selectedEvent, setSelectedEvent] = useState<EventOut | null>(null);
+  // 背景クリックで閉じる判定は mousedown がオーバーレイ自身で始まった場合に限る。
+  // click は mousedown/mouseup のターゲットの共通祖先で発火するため、説明文のテキストを
+  // ドラッグ選択してモーダル外でマウスを離すと click のターゲットがオーバーレイになり、
+  // このゲートが無いと選択操作だけでモーダルが閉じてしまう(レビュー指摘)。
+  const overlayMouseDownRef = useRef(false);
   const lastRangeRef = useRef<{ from: string; to: string } | null>(null);
   // リクエスト連番。datesSet の連打(週↔月の素早い切り替え・ドラッグでの範囲変更)で
   // 複数の api.events() が同時に飛んだ場合、後発リクエストより先に古いリクエストの
@@ -252,10 +257,19 @@ export default function CalendarView({ api }: { api: ApiClient }) {
         />
       </div>
       {selectedEvent && (
-        // 背景クリックで閉じる(オーバーレイ自身への onClick)。モーダル本体側は
-        // stopPropagation でバブリングを止め、中身のクリックでは閉じないようにする
+        // 背景クリックで閉じる(mousedown と click の両方がオーバーレイ自身のときのみ。
+        // overlayMouseDownRef のコメント参照)。モーダル本体側は stopPropagation で
+        // バブリングを止め、中身のクリックでは閉じないようにする
         // (デスクトップ予定詳細設計 2026-07-24 §3.2)。
-        <div className="modal-overlay" onClick={() => setSelectedEvent(null)}>
+        <div
+          className="modal-overlay"
+          onMouseDown={(e) => {
+            overlayMouseDownRef.current = e.target === e.currentTarget;
+          }}
+          onClick={(e) => {
+            if (overlayMouseDownRef.current && e.target === e.currentTarget) setSelectedEvent(null);
+          }}
+        >
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <button
               className="modal-close"

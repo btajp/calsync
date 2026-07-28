@@ -169,6 +169,16 @@ export default function PanelApp() {
     return () => window.removeEventListener("focus", loadEvents);
   }, [loadEvents]);
 
+  // パネルは blur → hide で使い回され React state が残るため、詳細ビューを開いたまま
+  // 閉じる(「会議に参加」でブラウザへフォーカスが移る場合を含む)と、次にトレイから
+  // 開いたときに古い詳細のスナップショットが表示されたままになる。blur(hide 直前)で
+  // 必ずリストへ戻す(レビュー指摘)。
+  useEffect(() => {
+    const onBlur = () => setSelectedItem(null);
+    window.addEventListener("blur", onBlur);
+    return () => window.removeEventListener("blur", onBlur);
+  }, []);
+
   // 色分けはアカウント定義順に依存する(CalendarView と同じ規則)。EventDetail の
   // colorOf props に渡すためのメモ化(orderedIds が変わったときだけ作り直す)。
   const colorOf = useCallback((accountId: string) => colorForAccount(accountId, orderedIds), [orderedIds]);
