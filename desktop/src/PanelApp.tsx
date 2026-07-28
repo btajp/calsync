@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { ApiClient, ApiError } from "./api";
@@ -85,6 +85,21 @@ export function buildScheduleList(events: EventOut[], now: Date): ScheduleDay[] 
         .sort((a, b) => a.sortKey - b.sortKey)
         .map(({ time, title, accountId, event }) => ({ time, title, accountId, event })),
     }));
+}
+
+/**
+ * ポップオーバーを開いたとき自動スクロールする先(「現在時刻の位置」)を決める純関数
+ * (2026-07-28 実機フィードバック)。終了済みの時刻あり予定は buildScheduleList が
+ * 除外済みなので、今日の最初の時刻あり項目が「開催中または次の予定」になる。
+ * 今日に時刻あり項目が無い場合は null(リスト先頭のままにする)。
+ */
+export function scheduleAnchor(days: ScheduleDay[], now: Date): { dateKey: string; index: number } | null {
+  const todayKey = localDateKey(now);
+  const day = days.find((d) => d.dateKey === todayKey);
+  if (!day) return null;
+  const index = day.items.findIndex((it) => it.time !== "終日");
+  if (index === -1) return null;
+  return { dateKey: day.dateKey, index };
 }
 
 function describeError(e: unknown): string {
@@ -179,6 +194,28 @@ export default function PanelApp() {
     return () => window.removeEventListener("blur", onBlur);
   }, []);
 
+  // 現在時刻の位置(今日の開催中/次の予定)への自動スクロール。パネルは使い回される
+  // ため前回のスクロール位置が残っており、表示のたび(setFocus → browser focus)に
+  // 戻す。
+  const anchor = useMemo(() => scheduleAnchor(days, new Date()), [days]);
+  const anchorRef = useRef<HTMLDivElement | null>(null);
+  const scrollToNow = useCallback(() => {
+    anchorRef.current?.scrollIntoView({ block: "start" });
+  }, []);
+  useEffect(() => {
+    window.addEventListener("focus", scrollToNow);
+    return () => window.removeEventListener("focus", scrollToNow);
+  }, [scrollToNow]);
+  // リストが表示されるタイミング(初回データ到着・「← 戻る」で詳細から戻った直後 =
+  // リスト DOM の作り直しでスクロール位置が先頭に戻る)にもスクロールする。依存を
+  // anchor オブジェクトではなく値キーにすることで、3分ごとの定期更新(同じ位置)では
+  // 再スクロールせず、閲覧中に位置が飛ばないようにする。
+  const anchorKey = anchor ? `${anchor.dateKey}:${anchor.index}` : null;
+  useEffect(() => {
+    if (selectedItem !== null) return;
+    scrollToNow();
+  }, [selectedItem, anchorKey, scrollToNow]);
+
   // 色分けはアカウント定義順に依存する(CalendarView と同じ規則)。EventDetail の
   // colorOf props に渡すためのメモ化(orderedIds が変わったときだけ作り直す)。
   const colorOf = useCallback((accountId: string) => colorForAccount(accountId, orderedIds), [orderedIds]);
@@ -227,7 +264,12 @@ export default function PanelApp() {
             <div key={day.dateKey} className="panel-day">
               <h3>{day.dateLabel}</h3>
               {day.items.map((item, i) => (
-                <div key={i} className="panel-item" onClick={() => setSelectedItem(item)}>
+                <div
+                  key={i}
+                  ref={anchor && day.dateKey === anchor.dateKey && i === anchor.index ? anchorRef : undefined}
+                  className="panel-item"
+                  onClick={() => setSelectedItem(item)}
+                >
                   <span className="legend-chip" style={{ backgroundColor: colorOf(item.accountId) }} />
                   <span className="panel-item-time">{item.time}</span>
                   <span className="panel-item-title">{item.title}</span>

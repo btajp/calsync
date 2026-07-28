@@ -356,9 +356,19 @@ p.error {
 
 /* ポップオーバー内の予定詳細ビュー(デスクトップ予定詳細設計 2026-07-24 §3.3)。
    panel-list と同じくポップオーバーの固定高さ内でスクロールできるようにする。 */
+/* 詳細ビューはヘッダ/日時/ボタン行を固定し、説明文だけを内部スクロールさせる
+   (2026-07-28 実機フィードバック: 長い説明文でボタンが埋まらないように)。 */
 .panel-detail {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panel-detail .event-detail {
+  flex: 1;
+  min-height: 0;
 }
 
 /* カレンダータブのイベントクリック→詳細モーダル(デスクトップ予定詳細設計 2026-07-24 §3.2)。
@@ -378,7 +388,9 @@ p.error {
   position: relative;
   width: min(480px, 90vw);
   max-height: 80vh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* スクロールは .event-detail-description 内部のみ */
   padding: 1.25rem 1.5rem;
   border-radius: 8px;
   background: #ffffff;
@@ -405,9 +417,33 @@ p.error {
 
 /* 予定詳細部品(EventDetail)。カレンダーのモーダル・ポップオーバーの両方で共用する
    (デスクトップ予定詳細設計 2026-07-24 §3.1)。 */
-.event-detail h2 {
-  margin: 0 0.5rem 0.5rem 0; /* 右上の ✕(.modal-close)とタイトルが重ならない余白 */
+.event-detail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.event-detail-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.event-detail-header h2 {
+  flex: 1;
+  margin: 0;
   font-size: 1.1rem;
+}
+
+.event-detail-join {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* モーダルでは右上の ✕(.modal-close)と参加ボタンが重ならない余白を取る */
+.modal-content .event-detail-header {
+  padding-right: 1.5rem;
 }
 
 .event-detail-datetime {
@@ -426,6 +462,8 @@ p.error {
   font-size: 0.9rem;
   line-height: 1.5;
   margin-bottom: 1rem;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .description-link {
