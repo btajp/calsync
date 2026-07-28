@@ -544,7 +544,11 @@ p.error {
   content: "";
   position: absolute;
   left: -6px;
-  top: -5px; /* 実線(2px・top:0〜2)の中心 y=1 にドット(12px)の中心を合わせる */
+  /* 絶対配置の基準は要素のパディングボックス(= 2px の上ボーダーの内側)なので、
+     実線(要素 top 0〜2px)の中心 y=1 に 12px ドットの中心を合わせるには
+     -1(中心)-6(半径)-2(ボーダー分)= -9 ではなく top(-7px)= 2 + (-7) + 6 = +1。
+     ボーダー分を忘れるとドットが 2px 下にずれる(実機で観測)。 */
+  top: -7px;
   width: 12px;
   height: 12px;
   border-radius: 50%;
@@ -556,12 +560,29 @@ p.error {
   position: absolute;
   left: -100vw;
   right: -100vw;
-  top: 0; /* 実線と同じ縦位置(today 列では実線の上に重なるが同色系なので実害なし) */
+  top: -2px; /* パディングボックス基準なので 2px の上ボーダー分を戻して実線と同じ縦位置に */
   border-top: 2px solid rgba(234, 67, 53, 0.3);
 }
 
 .fc .fc-timegrid-now-indicator-arrow {
   display: none;
+}
+
+/* 予定の文字を枠内に収める(2026-07-29 実機フィードバック: 30分予定などで
+   タイトルが枠の下へあふれ、隣の予定に文字が重なって読めない)。あふれた分は
+   クリップし、全文はホバーのツールチップ(renderEventContent の title 属性)と
+   クリックの詳細モーダルで見せる(Google カレンダーと同じ流儀)。 */
+.fc .fc-timegrid-event {
+  overflow: hidden;
+}
+
+/* 被っている予定の幅を列の右端まで伸ばす(2026-07-29 実機フィードバック:
+   長時間ブロックと重なる予定が半分以下の幅に潰される)。FullCalendar は
+   left/right をインラインスタイルで割り当てるため right だけ !important で
+   上書きする。z-index は FullCalendar のインライン値のままなので、後の予定が
+   前の予定の右側に重なる Google 風カスケードになる。 */
+.fc .fc-timegrid-event-harness {
+  right: 0 !important;
 }
 
 /* 「今日」ジャンプボタン: 押せる状態(今日が表示範囲外)のとき目立たせる */
