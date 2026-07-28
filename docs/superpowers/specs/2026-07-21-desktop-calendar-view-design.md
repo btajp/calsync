@@ -69,6 +69,7 @@ appserver がプロバイダを構築する際、**リフレッシュしない�
 - 色分け: アカウントごとに固定パレットを巡回割当(Slack ダイジェストの色割当と同じ発想。凡例を表示)
 - イベントクリックで `html_link` を既定ブラウザで開く(あれば)。`meeting_url` はツールチップ表示のみ(v1 は装飾最小)
 - 除外・統合はサーバー側で完結しているため、フロントは受け取った events を FullCalendar 形式に変換するだけ。この変換(`toFullCalendarEvents`)は純関数として export し vitest でテストする
+- 描画規則(2026-07-29 実機フィードバック反映): 予定枠に収まらない文字はクリップ(`.fc-timegrid-event { overflow: hidden }`)し、全文はホバーの title 属性(タイトル+会議 URL)とクリックの詳細モーダルで見せる。被っている予定は harness の right を `0 !important` で上書きして列右端まで伸ばし、FullCalendar のインライン z-index による Google 風カスケードにする(長時間ブロックと重なる予定が半分以下に潰れるのを防ぐ)
 
 ## 6. スコープ外
 

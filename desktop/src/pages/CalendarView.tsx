@@ -112,13 +112,15 @@ function describeError(e: unknown): string {
  * イベントの見出し表示。既定の eventContent を上書きしているため、FullCalendar が
  * 本来自動で付ける時刻表示(月ビューの各イベント行の先頭時刻等)が消えてしまう —
  * arg.timeText(終日イベントやタイムグリッド上のイベントでは空文字)を先頭に
- * 明示的に表示して補う。meeting_url があればネイティブ title 属性でツールチップ
- * 表示する(装飾は最小)。
+ * 明示的に表示して補う。枠に収まらない文字は CSS でクリップするため(2026-07-29
+ * 実機フィードバック)、ネイティブ title 属性のツールチップにタイトル全文
+ * (+会議 URL)を出して救済する。
  */
 function renderEventContent(arg: EventContentArg) {
   const ev = arg.event.extendedProps.event as EventOut;
+  const tooltip = [arg.event.title, ev.meeting_url].filter(Boolean).join("\n");
   return (
-    <div title={ev.meeting_url || undefined}>
+    <div title={tooltip || undefined}>
       {arg.timeText && <span className="fc-calsync-event-time">{arg.timeText} </span>}
       {arg.event.title}
     </div>
