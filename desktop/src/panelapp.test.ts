@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildScheduleList, scheduleAnchor } from "./PanelApp";
+import { buildScheduleList, nowLineIndex, scheduleAnchor } from "./PanelApp";
 import type { EventOut } from "./types";
 
 // 既存フィクスチャ(2026-07-21)がすべて未来になる固定基準時刻
@@ -163,5 +163,43 @@ describe("scheduleAnchor", () => {
 
   it("days が空なら null", () => {
     expect(scheduleAnchor([], now)).toBeNull();
+  });
+});
+
+describe("nowLineIndex", () => {
+  const now = new Date("2026-07-21T12:00:00+09:00");
+
+  function itemsFor(events: EventOut[]): ReturnType<typeof buildScheduleList>[number]["items"] {
+    const days = buildScheduleList(events, now);
+    return days[0]?.items ?? [];
+  }
+
+  it("終日と開始済み(開催中)の直後・未開始の直前に置く", () => {
+    const items = itemsFor([
+      baseEvent({ title: "終日", all_day: true, all_day_start: "2026-07-21", start: "", end: "" }),
+      baseEvent({ title: "開催中", start: "2026-07-21T11:30:00+09:00", end: "2026-07-21T12:30:00+09:00" }),
+      baseEvent({ title: "これから", start: "2026-07-21T15:00:00+09:00", end: "2026-07-21T16:00:00+09:00" }),
+    ]);
+    // [終日, 開催中, これから] → 線は index 2(これからの直前)
+    expect(nowLineIndex(items, now)).toBe(2);
+  });
+
+  it("すべて未開始なら先頭(終日の直後)", () => {
+    const items = itemsFor([
+      baseEvent({ title: "終日", all_day: true, all_day_start: "2026-07-21", start: "", end: "" }),
+      baseEvent({ title: "これから", start: "2026-07-21T15:00:00+09:00", end: "2026-07-21T16:00:00+09:00" }),
+    ]);
+    expect(nowLineIndex(items, now)).toBe(1);
+  });
+
+  it("すべて開始済みなら末尾(items.length)", () => {
+    const items = itemsFor([
+      baseEvent({ title: "開催中", start: "2026-07-21T11:00:00+09:00", end: "2026-07-21T13:00:00+09:00" }),
+    ]);
+    expect(nowLineIndex(items, now)).toBe(1);
+  });
+
+  it("items が空なら 0", () => {
+    expect(nowLineIndex([], now)).toBe(0);
   });
 });

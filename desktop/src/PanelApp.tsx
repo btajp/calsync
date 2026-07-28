@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-shell";
@@ -6,7 +6,7 @@ import { ApiClient, ApiError } from "./api";
 import { colorForAccount } from "./pages/CalendarView";
 import EventDetail from "./components/EventDetail";
 import { formatClock, scheduleFetchRange } from "./tray";
-import { isHttpsUrl } from "./urlSafety";
+import { isHttpsUrl, zoomAppUrl } from "./urlSafety";
 import type { EventOut } from "./types";
 
 export interface ScheduleItem {
@@ -90,6 +90,29 @@ export function buildScheduleList(events: EventOut[], now: Date): ScheduleDay[] 
 }
 
 /**
+ * 今日のグループ内で「現在時刻」の水平線を挿入する位置(items のインデックス。
+ * items.length なら末尾)を返す純関数(2026-07-28 実機フィードバック)。終日と
+ * 開始済み(開催中)の項目の直後 = これから始まる最初の項目の直前に置く。
+ * items は buildScheduleList の出力(終日が先頭・時刻あり昇順)であること。
+ */
+export function nowLineIndex(items: ScheduleItem[], now: Date): number {
+  let index = 0;
+  for (const it of items) {
+    if (it.time === "終日") {
+      index++;
+      continue;
+    }
+    const start = Date.parse(it.event.start);
+    if (!Number.isNaN(start) && start <= now.getTime()) {
+      index++;
+      continue;
+    }
+    break;
+  }
+  return index;
+}
+
+/**
  * ポップオーバーを開いたとき自動スクロールする先(「現在時刻の位置」)を決める純関数
  * (2026-07-28 実機フィードバック)。終了済みの時刻あり予定は buildScheduleList が
  * 除外済みなので、今日の最初の時刻あり項目が「開催中または次の予定」になる。
@@ -130,10 +153,18 @@ export default function PanelApp() {
 
   // 詳細を開かずにリスト行から直接会議へ参加する。https 以外はボタン自体を出さない
   // (EventDetail.showJoinButton と同じ方針)ため、ここでの再チェックは防御的。
+  // Zoom の URL は zoommtg:// で Zoom デスクトップアプリを直接開き、開けなければ
+  // ブラウザへフォールバックする(EventDetail.openMeeting と同じ方針)。
   const joinMeeting = (url: string) => {
     if (!isHttpsUrl(url)) return;
     setJoinError(null);
-    open(url).catch((e) => setJoinError(e instanceof Error ? e.message : String(e)));
+    const describe = (e: unknown) => (e instanceof Error ? e.message : String(e));
+    const appUrl = zoomAppUrl(url);
+    if (!appUrl) {
+      open(url).catch((e) => setJoinError(describe(e)));
+      return;
+    }
+    open(appUrl).catch(() => open(url).catch((e) => setJoinError(describe(e))));
   };
 
   // 起動時に listen("api-info") の登録が完了してから emit("panel-ready") を発火する
@@ -160,24 +191,55 @@ export default function PanelApp() {
     };
   }, []);
 
-  const loadEvents = useCallback(() => {
-    if (!api) return;
-    const { from, to } = scheduleFetchRange(new Date());
-    api
-      .events(from, to)
-      .then((res) => {
-        setError(null);
-        setDays(buildScheduleList(res.events, new Date()));
-      })
-      .catch((e) => setError(describeError(e)));
-    // 色分けはアカウント定義順に依存する(CalendarView と同じ規則)。取得失敗はベストエフォート。
-    api
-      .getConfig()
-      .then((c) => setOrderedIds((c.raw.accounts ?? []).map((a) => a.id).filter((v): v is string => !!v)))
-      .catch(() => {
-        /* 色は未知色にフォールバックするだけなので致命的ではない */
-      });
-  }, [api]);
+  // stale-while-revalidate の再取得タイマー(loadEvents 自身を setTimeout から
+  // 呼び直すための後方参照。useCallback は自分自身を依存にできない)。
+  const staleRetryTimerRef = useRef<number | null>(null);
+  const loadEventsRef = useRef<(retryOnStale?: boolean) => void>(() => {});
+  useEffect(
+    () => () => {
+      if (staleRetryTimerRef.current !== null) window.clearTimeout(staleRetryTimerRef.current);
+    },
+    [],
+  );
+
+  const loadEvents = useCallback(
+    (retryOnStale = true) => {
+      if (!api) return;
+      // 予約済みの stale 再取得はどんな新規取得でも無効化する(CalendarView と同じ
+      // 理由。focus・3 分間隔の取得と二重に走らせない)。
+      if (staleRetryTimerRef.current !== null) {
+        window.clearTimeout(staleRetryTimerRef.current);
+        staleRetryTimerRef.current = null;
+      }
+      const { from, to } = scheduleFetchRange(new Date());
+      api
+        .events(from, to)
+        .then((res) => {
+          setError(null);
+          setDays(buildScheduleList(res.events, new Date()));
+          // appserver が期限切れキャッシュを即返した(stale-while-revalidate)場合、
+          // 裏で最新化が進んでいるので 1 回だけ少し後に取り直す(CalendarView と同じ
+          // 方針。再取得でも stale のままなら 3 分ごとの定期更新に任せる)。
+          if (res.stale && retryOnStale) {
+            if (staleRetryTimerRef.current !== null) window.clearTimeout(staleRetryTimerRef.current);
+            staleRetryTimerRef.current = window.setTimeout(() => {
+              staleRetryTimerRef.current = null;
+              loadEventsRef.current(false);
+            }, 4000);
+          }
+        })
+        .catch((e) => setError(describeError(e)));
+      // 色分けはアカウント定義順に依存する(CalendarView と同じ規則)。取得失敗はベストエフォート。
+      api
+        .getConfig()
+        .then((c) => setOrderedIds((c.raw.accounts ?? []).map((a) => a.id).filter((v): v is string => !!v)))
+        .catch(() => {
+          /* 色は未知色にフォールバックするだけなので致命的ではない */
+        });
+    },
+    [api],
+  );
+  loadEventsRef.current = loadEvents;
 
   useEffect(() => {
     loadEvents();
@@ -191,10 +253,11 @@ export default function PanelApp() {
 
   // 表示のたびに再取得する。ポップオーバーは show/hide で使い回されるため、非表示中に
   // 予定が変わっていても、次に表示され setFocus() されたタイミングの browser focus で
-  // 最新化する。
+  // 最新化する(FocusEvent を retryOnStale 引数に誤って渡さないようラップする)。
   useEffect(() => {
-    window.addEventListener("focus", loadEvents);
-    return () => window.removeEventListener("focus", loadEvents);
+    const onFocus = () => loadEvents();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, [loadEvents]);
 
   // パネルは blur → hide で使い回され React state が残るため、詳細ビューを開いたまま
@@ -232,6 +295,10 @@ export default function PanelApp() {
   // 色分けはアカウント定義順に依存する(CalendarView と同じ規則)。EventDetail の
   // colorOf props に渡すためのメモ化(orderedIds が変わったときだけ作り直す)。
   const colorOf = useCallback((accountId: string) => colorForAccount(accountId, orderedIds), [orderedIds]);
+
+  // 「今日」判定と現在時刻ラインは描画時点の時刻で決める(データ更新・focus の
+  // たびに再レンダリングされるので、その頻度で追従すれば十分)。
+  const todayKey = localDateKey(new Date());
 
   const openMain = async () => {
     const main = await WebviewWindow.getByLabel("main");
@@ -274,35 +341,52 @@ export default function PanelApp() {
         <p className="hint">今後7日以内の予定はありません。</p>
       ) : (
         <div className="panel-list">
-          {days.map((day) => (
-            <div key={day.dateKey} className="panel-day">
-              <h3>{day.dateLabel}</h3>
-              {day.items.map((item, i) => (
-                <div
-                  key={i}
-                  ref={anchor && day.dateKey === anchor.dateKey && i === anchor.index ? anchorRef : undefined}
-                  className="panel-item"
-                  onClick={() => setSelectedItem(item)}
-                >
-                  <span className="legend-chip" style={{ backgroundColor: colorOf(item.accountId) }} />
-                  <span className="panel-item-time">{item.time}</span>
-                  <span className="panel-item-title">{item.title}</span>
-                  {isHttpsUrl(item.event.meeting_url) && (
-                    <button
-                      className="panel-item-join"
-                      onClick={(e) => {
-                        // 行クリック(詳細ビューへの遷移)と分離する
-                        e.stopPropagation();
-                        joinMeeting(item.event.meeting_url);
-                      }}
+          {days.map((day) => {
+            // 今日のグループにだけ「現在時刻」の水平線を挿し込む
+            // (2026-07-28 実機フィードバック)。位置は再レンダリング
+            // (データ更新・focus)のたびに現在時刻で計算し直す。
+            const lineIndex = day.dateKey === todayKey ? nowLineIndex(day.items, new Date()) : null;
+            // 自動スクロールの合わせ先: 開催中の予定が無い通常ケースでは現在時刻ライン
+            // がアンカー項目の直前に来るため、項目を先頭に合わせるとラインだけが上に
+            // 隠れる(レビュー指摘)。ラインが項目以前に来るときはラインへ、開催中が
+            // あるとき(ラインが後ろ)はアンカー項目へ合わせる。
+            const anchorIndex = anchor !== null && day.dateKey === anchor.dateKey ? anchor.index : null;
+            const lineIsScrollTarget = anchorIndex !== null && lineIndex !== null && lineIndex <= anchorIndex;
+            return (
+              <div key={day.dateKey} className="panel-day">
+                <h3>{day.dateLabel}</h3>
+                {day.items.map((item, i) => (
+                  <Fragment key={i}>
+                    {lineIndex === i && (
+                      <div className="panel-now-line" aria-hidden ref={lineIsScrollTarget ? anchorRef : undefined} />
+                    )}
+                    <div
+                      ref={anchorIndex !== null && !lineIsScrollTarget && i === anchorIndex ? anchorRef : undefined}
+                      className="panel-item"
+                      onClick={() => setSelectedItem(item)}
                     >
-                      参加
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          ))}
+                      <span className="legend-chip" style={{ backgroundColor: colorOf(item.accountId) }} />
+                      <span className="panel-item-time">{item.time}</span>
+                      <span className="panel-item-title">{item.title}</span>
+                      {isHttpsUrl(item.event.meeting_url) && (
+                        <button
+                          className="panel-item-join"
+                          onClick={(e) => {
+                            // 行クリック(詳細ビューへの遷移)と分離する
+                            e.stopPropagation();
+                            joinMeeting(item.event.meeting_url);
+                          }}
+                        >
+                          参加
+                        </button>
+                      )}
+                    </div>
+                  </Fragment>
+                ))}
+                {lineIndex === day.items.length && <div className="panel-now-line" aria-hidden />}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

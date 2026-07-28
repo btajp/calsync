@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -23,6 +24,16 @@ const maxEventsWindow = 62 * 24 * time.Hour
 // (ビュー切替の連打対策。手動更新は refresh=1 でバイパスする。スペック §4)。
 const eventsCacheTTL = 60 * time.Second
 
+// eventsCacheStaleMax は TTL 切れエントリを stale-while-revalidate に流用できる
+// 追加猶予(2026-07-28 体感速度対策)。TTL 切れでも猶予内なら古い内容を即座に返し、
+// バックグラウンドで取り直す(レスポンスに stale: true を付け、フロントが少し後に
+// 再取得して最新化する)。猶予も過ぎたエントリは通常のミスとして同期取得する。
+const eventsCacheStaleMax = 30 * time.Minute
+
+// eventsRefreshTimeout はバックグラウンド更新 1 回の上限。リクエストの ctx とは
+// 独立(stale 応答を返した時点でリクエストは完了しているため)。
+const eventsRefreshTimeout = 60 * time.Second
+
 // EventOut は GET /api/events の 1 件(engine.DigestEntry の JSON 写像。スペック §4)。
 type EventOut struct {
 	AccountID   string   `json:"account_id"`  // 代表アカウント = AccountIDs[0]
@@ -42,6 +53,9 @@ type EventOut struct {
 type EventsResponse struct {
 	Events []EventOut `json:"events"`
 	Failed []string   `json:"failed"`
+	// Stale は TTL 切れキャッシュを stale-while-revalidate で返したとき true。
+	// バックグラウンドで最新化が進行中なので、フロントは少し後に再取得するとよい。
+	Stale bool `json:"stale,omitempty"`
 }
 
 type eventsCacheKey struct {
@@ -52,6 +66,11 @@ type eventsCacheKey struct {
 type eventsCacheEntry struct {
 	resp    EventsResponse
 	expires time.Time
+	// gen はエントリ書き込みごとに増える世代番号。バックグラウンド更新(SWR)が
+	// 開始時点の世代を控え、完了時に世代が変わっていたら書き込みを捨てるための
+	// もの(refresh=1 の同期取得が先に新しい結果を書いた場合に、古いスナップ
+	// ショットで上書きする lost-update を防ぐ。レビュー指摘)。
+	gen uint64
 }
 
 // handleEvents は GET /api/events?from=<RFC3339>&to=<RFC3339>&refresh=<0|1> を
@@ -96,7 +115,17 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	key := eventsCacheKey{from: from.Format(time.RFC3339), to: to.Format(time.RFC3339)}
 	now := time.Now()
 	if !refresh {
-		if resp, ok := s.eventsCacheGet(key, now); ok {
+		resp, fresh, stale := s.eventsCacheGet(key, now)
+		if fresh {
+			writeJSON(w, resp)
+			return
+		}
+		if stale {
+			// stale-while-revalidate: 古い内容を即返し、裏で取り直す(2026-07-28
+			// 体感速度対策。プロバイダのライブ取得は数秒かかるため、まず前回の
+			// 結果で描画してもらう)。
+			resp.Stale = true
+			s.refreshEventsAsync(key, from, to)
 			writeJSON(w, resp)
 			return
 		}
@@ -119,32 +148,116 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-func (s *Server) eventsCacheGet(key eventsCacheKey, now time.Time) (EventsResponse, bool) {
+// eventsCacheGet はキャッシュを引く。fresh は TTL 内、stale は TTL 切れだが
+// eventsCacheStaleMax の猶予内(stale-while-revalidate に使える)。両方 false なら
+// エントリ無し(またはstale猶予も超過)で、呼び出し側が同期取得する。
+func (s *Server) eventsCacheGet(key eventsCacheKey, now time.Time) (resp EventsResponse, fresh bool, stale bool) {
 	s.eventsCacheMu.Lock()
 	defer s.eventsCacheMu.Unlock()
 	e, ok := s.eventsCache[key]
-	if !ok || now.After(e.expires) {
-		return EventsResponse{}, false
+	if !ok || now.After(e.expires.Add(eventsCacheStaleMax)) {
+		return EventsResponse{}, false, false
 	}
-	return e.resp, true
+	if now.After(e.expires) {
+		return e.resp, false, true
+	}
+	return e.resp, true, false
 }
 
 func (s *Server) eventsCacheSet(key eventsCacheKey, resp EventsResponse, now time.Time) {
 	s.eventsCacheMu.Lock()
 	defer s.eventsCacheMu.Unlock()
+	s.eventsCacheSetLocked(key, resp, now)
+}
+
+// eventsCacheSetLocked は eventsCacheSet の本体(eventsCacheMu 保持前提)。
+func (s *Server) eventsCacheSetLocked(key eventsCacheKey, resp EventsResponse, now time.Time) {
 	if s.eventsCache == nil {
 		s.eventsCache = make(map[eventsCacheKey]eventsCacheEntry)
 	}
 	// 窓を変えながらのビュー切替を繰り返すと eventsCache のキー(from/to の
-	// 組)が際限なく増える(全キーが TTL 切れでも参照されない限りマップに
+	// 組)が際限なく増える(全キーが期限切れでも参照されない限りマップに
 	// 残り続ける)。書き込みのたびに期限切れエントリを掃除して、無制限に
-	// メモリを積み上げないようにする。
+	// メモリを積み上げないようにする。TTL 切れ直後は stale-while-revalidate に
+	// 使うため、掃除の基準は stale 猶予(eventsCacheStaleMax)も過ぎたもの。
 	for k, e := range s.eventsCache {
-		if now.After(e.expires) {
+		if now.After(e.expires.Add(eventsCacheStaleMax)) {
 			delete(s.eventsCache, k)
 		}
 	}
-	s.eventsCache[key] = eventsCacheEntry{resp: resp, expires: now.Add(eventsCacheTTL)}
+	s.eventsCacheGen++
+	s.eventsCache[key] = eventsCacheEntry{resp: resp, expires: now.Add(eventsCacheTTL), gen: s.eventsCacheGen}
+}
+
+// eventsCacheSetIfGen は key の世代が expect のままのときだけ書き込む
+// (compare-and-set。チェックと書き込みを同一ロック内で行う)。他の書き込み
+// (refresh=1 の同期取得等)が先行していた場合は false を返して何もしない。
+func (s *Server) eventsCacheSetIfGen(key eventsCacheKey, resp EventsResponse, now time.Time, expect uint64) bool {
+	s.eventsCacheMu.Lock()
+	defer s.eventsCacheMu.Unlock()
+	if s.eventsCache[key].gen != expect {
+		return false
+	}
+	s.eventsCacheSetLocked(key, resp, now)
+	return true
+}
+
+// refreshEventsAsync は stale 応答を返した窓をバックグラウンドで取り直し、成功時に
+// キャッシュを最新化する。同一キーの更新は single-flight(進行中なら何もしない)。
+// リクエストの ctx から独立した専用 ctx を使う(呼び出し元のリクエストは stale 応答で
+// 既に完了しているため。maintenance と同じ理由で goroutine は panic を回収する)。
+func (s *Server) refreshEventsAsync(key eventsCacheKey, from, to time.Time) {
+	s.eventsCacheMu.Lock()
+	if s.eventsRefreshing == nil {
+		s.eventsRefreshing = make(map[eventsCacheKey]bool)
+	}
+	if s.eventsRefreshing[key] {
+		s.eventsCacheMu.Unlock()
+		return
+	}
+	s.eventsRefreshing[key] = true
+	// 開始時点の世代を控える。完了時に世代が進んでいたら(refresh=1 の同期取得等が
+	// 先に書いた)、こちらの古いスナップショットでの上書きを捨てる(レビュー指摘の
+	// lost-update 防止)。
+	startGen := s.eventsCache[key].gen
+	s.eventsCacheMu.Unlock()
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("events refresh panic: %v", r)
+			}
+			s.eventsCacheMu.Lock()
+			delete(s.eventsRefreshing, key)
+			s.eventsCacheMu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), eventsRefreshTimeout)
+		defer cancel()
+		collect := s.CollectEvents
+		if collect == nil {
+			collect = s.defaultCollectEvents
+		}
+		entries, failed, err := collect(ctx, model.Window{Start: from, End: to})
+		if err != nil {
+			log.Printf("events refresh %s..%s: %v", key.from, key.to, err)
+			return
+		}
+		// 全滅ガード: 1 件も取れず失敗アカウントがある(典型はネットワーク断)結果で
+		// 既存の正常な stale エントリを上書きすると、直前まで表示できていた予定一覧が
+		// 無警告で「予定なし」に差し替わる(PanelApp は failed を表示しない)。この
+		// 場合は既存エントリを温存し、次の同期取得に任せる(レビュー指摘)。
+		if len(entries) == 0 && len(failed) > 0 {
+			log.Printf("events refresh %s..%s: all failed (%v), keeping previous cache entry", key.from, key.to, failed)
+			return
+		}
+		resp := EventsResponse{Events: toEventOut(entries), Failed: failed}
+		if resp.Failed == nil {
+			resp.Failed = []string{}
+		}
+		if !s.eventsCacheSetIfGen(key, resp, time.Now(), startGen) {
+			log.Printf("events refresh %s..%s: discarded (newer result was cached meanwhile)", key.from, key.to)
+		}
+	}()
 }
 
 // toEventOut は engine.DigestEntry を API レスポンスの形へ写像する(スペック §4)。

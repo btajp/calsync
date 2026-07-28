@@ -160,8 +160,29 @@ export default function CalendarView({ api }: { api: ApiClient }) {
 
   const colorOf = useCallback((accountId: string) => colorForAccount(accountId, orderedIds), [orderedIds]);
 
+  // stale-while-revalidate の再取得タイマー(loadEvents 自身を setTimeout から
+  // 呼び直すための後方参照。useCallback は自分自身を依存にできない)。
+  const staleRetryTimerRef = useRef<number | null>(null);
+  const loadEventsRef = useRef<(from: string, to: string, refresh: boolean, retryOnStale?: boolean) => void>(
+    () => {},
+  );
+  useEffect(
+    () => () => {
+      if (staleRetryTimerRef.current !== null) window.clearTimeout(staleRetryTimerRef.current);
+    },
+    [],
+  );
+
   const loadEvents = useCallback(
-    (from: string, to: string, refresh: boolean) => {
+    (from: string, to: string, refresh: boolean, retryOnStale = true) => {
+      // 予約済みの stale 再取得はどんな新規リクエストでも無効化する。残しておくと、
+      // 手動再読み込み(refresh=1・数秒かかる)の in-flight 中にタイマーが発火して
+      // 最新の seq を奪い、後から届く refresh の最新データが isStale() で丸ごと
+      // 破棄される(レビュー指摘: 手動更新が「何も変わらない」ように見える)。
+      if (staleRetryTimerRef.current !== null) {
+        window.clearTimeout(staleRetryTimerRef.current);
+        staleRetryTimerRef.current = null;
+      }
       lastRangeRef.current = { from, to };
       const seq = ++requestSeqRef.current;
       const isStale = () => requestSeqRef.current !== seq;
@@ -173,6 +194,20 @@ export default function CalendarView({ api }: { api: ApiClient }) {
           if (isStale()) return; // 自分より新しいリクエストが既に発行済み → 結果を破棄
           setEvents(res.events);
           setFailed(res.failed);
+          // appserver が期限切れキャッシュを即返した(stale-while-revalidate)場合、
+          // 裏で最新化が進んでいるので 1 回だけ少し後に取り直す。再取得でも stale の
+          // ままなら以後は自然な再取得(ビュー切替・手動更新)に任せ、無限リトライに
+          // しない。表示範囲が変わっていたら再取得しない(古い範囲を蒸し返さない)。
+          if (res.stale && retryOnStale) {
+            if (staleRetryTimerRef.current !== null) window.clearTimeout(staleRetryTimerRef.current);
+            staleRetryTimerRef.current = window.setTimeout(() => {
+              staleRetryTimerRef.current = null;
+              const range = lastRangeRef.current;
+              if (range && range.from === from && range.to === to) {
+                loadEventsRef.current(from, to, false, false);
+              }
+            }, 4000);
+          }
         })
         .catch((e) => {
           if (isStale()) return;
@@ -185,6 +220,7 @@ export default function CalendarView({ api }: { api: ApiClient }) {
     },
     [api],
   );
+  loadEventsRef.current = loadEvents;
 
   const handleDatesSet = useCallback(
     (arg: DatesSetArg) => {
@@ -254,6 +290,9 @@ export default function CalendarView({ api }: { api: ApiClient }) {
           eventContent={renderEventContent}
           datesSet={handleDatesSet}
           eventClick={handleEventClick}
+          // 週/日ビューに現在時刻の水平線を表示する(2026-07-28 実機フィードバック:
+          // 現在時刻の位置がわかりにくい)。既定 500ms の再描画間隔はそのまま
+          nowIndicator
         />
       </div>
       {selectedEvent && (

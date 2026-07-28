@@ -55,12 +55,15 @@ appserver がプロバイダを構築する際、**リフレッシュしない�
 
 - `events` は `DigestEntry` の写像(dedupe 統合後。`account_id` は代表 = `AccountIDs[0]`、全由来は `account_ids` で返す)。終日イベントは `all_day: true` + `all_day_start`(YYYY-MM-DD)。複数日にまたがる終日イベントは排他的終了日を `all_day_end`(YYYY-MM-DD)に設定する(単日終日イベントは空文字。`model.NormalizedEvent.AllDayEnd` → `DigestEntry.AllDayEnd` → `EventOut.AllDayEnd` の 3 層で運ぶ)。フロントは `all_day_end` があれば FullCalendar の排他的終了日としてそのまま使う(同じ排他的終了日の規約なので変換不要)
 - 同一窓の連続取得を抑えるため、appserver 内に (from,to) キーの 60 秒メモリキャッシュを持つ(ビュー切替の連打対策。手動更新ボタンはキャッシュをバイパスする `refresh=1` を付ける)
+- **stale-while-revalidate(2026-07-28 体感速度対策)**: TTL 切れでも 30 分の猶予内なら古い内容に `stale: true` を付けて即返し、バックグラウンド(single-flight・リクエスト独立の 60 秒 timeout ctx)で取り直してキャッシュを最新化する。フロントは stale 応答の約 4 秒後に 1 回だけ再取得する(再取得でも stale なら以後は自然な再取得に任せ、無限リトライにしない)。`refresh=1` は従来どおり同期取得
+- **取得の並列化(2026-07-28)**: `Engine.CollectWindow` はアカウント間の取得を並列に行う(アカウント内のカレンダーは従来どおり直列)。dedupe(`appendDigestEntry`)の「設定順で最初の非空を採用」という決定的規則を保つため、並列なのは取得だけで、マージは全取得完了後に設定順の単一ループで行う
 
 ## 5. UI(§14 論点 3 の確定)
 
 **FullCalendar**(`@fullcalendar/react` + `daygrid` + `timegrid`。MIT)を採用。新タブ「カレンダー」。
 
 - ビュー: 週(timeGridWeek・既定)/ 月(dayGridMonth)切替。FullCalendar 標準の前後ナビ・今日ボタン
+- 現在時刻・今日の強調(2026-07-28 実機フィードバック反映): 週/日ビューに `nowIndicator`(現在時刻の水平線)を表示。今日の背景は `--fc-today-bg-color` を濃い青系に上書きし、列見出し/日付番号をピル型で強調。「今日」ボタンは押せる状態(今日が表示範囲外)のとき青色で目立たせる
 - 表示範囲の変化(`datesSet`)で `/api/events` を取得。ローディング・エラー表示あり
 - 色分け: アカウントごとに固定パレットを巡回割当(Slack ダイジェストの色割当と同じ発想。凡例を表示)
 - イベントクリックで `html_link` を既定ブラウザで開く(あれば)。`meeting_url` はツールチップ表示のみ(v1 は装飾最小)

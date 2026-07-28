@@ -233,23 +233,37 @@ function Shell({
       })();
     });
 
-    const fetchTrayEvents = () => {
+    // stale-while-revalidate 追随: 取得間隔(5分)> キャッシュ TTL(60秒)のため、
+    // stale 応答をそのまま採用して終わると毎周期「前周期のデータ+裏で更新」となり
+    // トレイ表示が常に 1 周期遅れる。stale なら少し後に 1 回だけ取り直す
+    // (PanelApp/CalendarView と同じ方針。レビュー指摘)。
+    let trayStaleTimer: number | null = null;
+    const fetchTrayEvents = (retryOnStale = true) => {
       const { from, to } = scheduleFetchRange(new Date());
       api
         .events(from, to)
         .then((res) => {
-          if (!cancelled) setTrayEvents(res.events);
+          if (cancelled) return;
+          setTrayEvents(res.events);
+          if (res.stale && retryOnStale) {
+            if (trayStaleTimer !== null) window.clearTimeout(trayStaleTimer);
+            trayStaleTimer = window.setTimeout(() => {
+              trayStaleTimer = null;
+              fetchTrayEvents(false);
+            }, 4000);
+          }
         })
         .catch(() => {
           // ベストエフォート。トレイタイトルは古いデータのまま次周期まで維持する
         });
     };
     fetchTrayEvents();
-    const id = setInterval(fetchTrayEvents, TRAY_EVENTS_REFRESH_MS);
+    const id = setInterval(() => fetchTrayEvents(), TRAY_EVENTS_REFRESH_MS);
 
     return () => {
       cancelled = true;
       clearInterval(id);
+      if (trayStaleTimer !== null) window.clearTimeout(trayStaleTimer);
       void panelReadyPromise.then((u) => u());
       void quitAppPromise.then((u) => u());
     };
