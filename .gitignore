@@ -3,6 +3,9 @@
 /data/
 /calsync.yaml
 
+# macOS
+.DS_Store
+
 # desktop/ (Tauri + Vite): ビルド成果物・依存関係(リポジトリには含めない)
 desktop/node_modules/
 desktop/dist/
