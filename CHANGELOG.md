@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-07-28
+
+### Changed
+
+- **デスクトップアプリ: 参加ボタンのサービス表示を色ドットからロゴアイコンに変更**。Zoom / Google Meet / Webex は simple-icons(CC0-1.0)のロゴパスをブランド色で表示。Microsoft Teams のロゴは Microsoft の商標ポリシーにより simple-icons に収録されていないため、ロゴの再現を避けて紫の頭文字バッジ(T)で代替する
+
 ## [0.5.1] - 2026-07-28
 
 ### Changed
