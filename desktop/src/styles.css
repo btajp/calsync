@@ -599,6 +599,122 @@ p.error {
   font-size: 0.92em;
 }
 
+/* ===== 同時開始クラスタの合成リスト箱(2026-07-29 同時刻表示検討・案1) ===== */
+
+/* 1 行 = 1 予定(折り返さない)。行数 = 件数の不変条件で個数を認識できるようにする。
+   padding-left(レール分のガター)はレール本数に連動して inline style で与える */
+.fc-calsync-cluster {
+  position: relative;
+  height: 100%;
+}
+
+.fc-calsync-cluster-count {
+  position: absolute;
+  top: 1px;
+  right: 2px;
+  z-index: 2;
+  font-size: 0.72em;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.45); /* 半透明すぎると下の時刻文字と混ざる(レビュー指摘) */
+  border-radius: 999px;
+  padding: 0 5px;
+}
+
+/* レール: 本数 = 件数、高さ = 各予定の長さ(箱の長さ比)。行と同じ並び順 */
+.fc-calsync-cluster-rails {
+  position: absolute;
+  left: 1px;
+  top: 2px;
+  bottom: 2px;
+  display: flex;
+  gap: 2px;
+  align-items: flex-start;
+  /* レール画素のクリックが行判定(data-cluster-index の closest)を外さないように
+     ヒットテストから除外する(レビュー指摘) */
+  pointer-events: none;
+}
+
+.fc-calsync-cluster-rail {
+  width: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.fc-calsync-cluster-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* 1.6em だと 30 分×2 件の箱(2em)で 2 行目がほぼ見えない(レビュー指摘)。
+     詰めても 2 行目は部分表示になるが、「2 行目がある」ことは視認できる高さにする */
+  min-height: 1.3em;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  padding-right: 2px;
+}
+
+/* 1 行目は「N件」バッジと重ならないよう右余白を確保する(レビュー指摘) */
+.fc-calsync-cluster-row:first-child {
+  padding-right: 2.4em;
+}
+
+.fc-calsync-cluster-row + .fc-calsync-cluster-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.fc-calsync-cluster-row:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+}
+
+.fc-calsync-cluster-row .legend-chip {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
+}
+
+.fc-calsync-cluster-row-title {
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+/* タイトル正規化: 【社内】等の接頭辞をチップ化して識別に効く文字を先頭に出す
+   (2026-07-29 同時刻表示検討・案4。単独イベントとクラスタ行で共用) */
+.fc-calsync-prefix {
+  display: inline-block;
+  font-size: 0.82em;
+  line-height: 1.3;
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+  padding: 0 3px;
+  margin-right: 3px;
+  vertical-align: 0.06em;
+}
+
+/* ホバー全幅展開(2026-07-29 同時刻表示検討・案3): マウスを乗せている間だけ
+   全幅+内容の高さまで展開して全文を見せる。クリック不要の中間層。
+   compactOverlapLefts の inline left は !important を付けていないため、
+   この :hover の !important が勝つ */
+.fc .fc-timegrid-event-harness:hover {
+  left: 0 !important;
+  z-index: 60 !important;
+}
+
+.fc .fc-timegrid-event-harness:hover .fc-timegrid-event {
+  bottom: auto;
+  height: auto;
+  min-height: 100%;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.35);
+}
+
+/* ホバー展開中は箱の高さが「時間の長さ」ではなく「内容の高さ」になり、% 指定の
+   レールの長さが意味を失うため非表示にする(レビュー指摘) */
+.fc .fc-timegrid-event-harness:hover .fc-calsync-cluster-rails {
+  display: none;
+}
+
 /* 30 分予定でも 1 行が確実に入るようスロットを少し高くする(既定 1.5em。
    2026-07-29 実機フィードバック: 時刻しか見えずタイトルが読めない) */
 .fc .fc-timegrid-slot {
