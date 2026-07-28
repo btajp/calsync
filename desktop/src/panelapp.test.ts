@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildScheduleList } from "./PanelApp";
+import { buildScheduleList, scheduleAnchor } from "./PanelApp";
 import type { EventOut } from "./types";
 
 // 既存フィクスチャ(2026-07-21)がすべて未来になる固定基準時刻
@@ -133,5 +133,35 @@ describe("buildScheduleList", () => {
     const ev = baseEvent({ title: "end不明", start: "2026-07-21T09:00:00+09:00", end: "invalid" });
     const days = buildScheduleList([ev], now);
     expect(days.flatMap((d) => d.items.map((i) => i.title))).toEqual(["end不明"]);
+  });
+});
+
+describe("scheduleAnchor", () => {
+  const now = new Date("2026-07-21T12:00:00+09:00");
+
+  it("今日の最初の時刻あり項目を指す(終日は飛ばす)", () => {
+    const events = [
+      baseEvent({ title: "終日", all_day: true, all_day_start: "2026-07-21", start: "", end: "" }),
+      baseEvent({ title: "開催中", start: "2026-07-21T11:30:00+09:00", end: "2026-07-21T12:30:00+09:00" }),
+      baseEvent({ title: "これから", start: "2026-07-21T15:00:00+09:00", end: "2026-07-21T16:00:00+09:00" }),
+    ];
+    const days = buildScheduleList(events, now);
+    expect(scheduleAnchor(days, now)).toEqual({ dateKey: "2026-07-21", index: 1 });
+  });
+
+  it("今日に終日項目しか無ければ null(リスト先頭のまま)", () => {
+    const ev = baseEvent({ title: "終日のみ", all_day: true, all_day_start: "2026-07-21", start: "", end: "" });
+    const days = buildScheduleList([ev], now);
+    expect(scheduleAnchor(days, now)).toBeNull();
+  });
+
+  it("今日の項目が無ければ null(翌日以降しか無い場合は先頭のまま)", () => {
+    const ev = baseEvent({ title: "明日", start: "2026-07-22T10:00:00+09:00", end: "2026-07-22T11:00:00+09:00" });
+    const days = buildScheduleList([ev], now);
+    expect(scheduleAnchor(days, now)).toBeNull();
+  });
+
+  it("days が空なら null", () => {
+    expect(scheduleAnchor([], now)).toBeNull();
   });
 });

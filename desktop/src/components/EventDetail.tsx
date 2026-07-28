@@ -179,7 +179,17 @@ export default function EventDetail({
 
   return (
     <div className="event-detail">
-      <h2>{view.title}</h2>
+      {/* 会議参加はタイトル右側に置く。長い説明文では下部のボタン行までスクロールが
+          必要になるため、最頻用アクションを常に見える位置に出す(2026-07-28 実機
+          フィードバック)。 */}
+      <div className="event-detail-header">
+        <h2>{view.title}</h2>
+        {view.showJoinButton && (
+          <button className="event-detail-join" onClick={() => openHttps(event.meeting_url)}>
+            会議に参加
+          </button>
+        )}
+      </div>
       <p className="event-detail-datetime">{view.dateTimeLabel}</p>
       <div className="calendar-legend event-detail-accounts">
         {view.accountIds.map((id) => (
@@ -204,7 +214,6 @@ export default function EventDetail({
         </div>
       )}
       <div className="button-row">
-        {view.showJoinButton && <button onClick={() => openHttps(event.meeting_url)}>会議に参加</button>}
         {view.showCalendarLink && (
           <button className="link-button" onClick={() => openHttps(event.html_link)}>
             カレンダーで開く
