@@ -108,19 +108,58 @@ function describeError(e: unknown): string {
   return String(e);
 }
 
+// FullCalendar が harness に与える配置情報(inline style から読む)。
+// level は z-index - 1 = FullCalendar の stackDepth(重なり段数)。
+export interface HarnessGeom {
+  top: number; // px
+  level: number; // 0 = 重なりの一番下
+  left: number; // FullCalendar 計算の左インセット(%)
+}
+
+/**
+ * 被っている予定の左インセットを「1 段につき indentPercent%」へ詰め替える純関数
+ * (2026-07-29 実機フィードバック: FullCalendar 既定は 1 段 50% で右半分に潰れる)。
+ * 例外: 開始位置(top)がほぼ同じ予定同士は FullCalendar の横並びを維持する —
+ * 5% 詰めにすると後の予定が前の予定をほぼ完全に覆い、どちらかが読めなくなるため
+ * (Google カレンダーも同時開始は横並び・時間差の重なりだけカスケード)。
+ * 戻り値は各要素の新しい left%(null = 変更しない)。
+ */
+export function compactOverlapLefts(items: HarnessGeom[], indentPercent = 5, topTolerance = 3): (number | null)[] {
+  return items.map((it) => {
+    if (it.level <= 0) return null;
+    const sameStartBelow = items.some(
+      (o) => o !== it && o.level < it.level && Math.abs(o.top - it.top) <= topTolerance,
+    );
+    if (sameStartBelow) return null;
+    const compact = it.level * indentPercent;
+    return compact < it.left ? compact : null; // FC の方が既に狭いインセットなら触らない
+  });
+}
+
 /**
  * イベントの見出し表示。既定の eventContent を上書きしているため、FullCalendar が
  * 本来自動で付ける時刻表示(月ビューの各イベント行の先頭時刻等)が消えてしまう —
- * arg.timeText(終日イベントやタイムグリッド上のイベントでは空文字)を先頭に
- * 明示的に表示して補う。枠に収まらない文字は CSS でクリップするため(2026-07-29
- * 実機フィードバック)、ネイティブ title 属性のツールチップにタイトル全文
- * (+会議 URL)を出して救済する。
+ * arg.timeText(終日イベントでは空文字)を明示的に表示して補う。枠に収まらない
+ * 文字は CSS でクリップするため(2026-07-29 実機フィードバック)、ネイティブ
+ * title 属性のツールチップにタイトル全文(+会議 URL)を出して救済する。
+ * 週/日(timeGrid)ビューはタイトルを先頭にする — 30 分予定は最初の 1 行しか
+ * 見えず、時刻先頭だと「10:30 - 11:00」だけでタイトルが全く読めない(時刻は
+ * グリッド上の位置でわかる。2026-07-29 実機フィードバック)。月/リストは従来
+ * どおり時刻先頭。
  */
 function renderEventContent(arg: EventContentArg) {
   const ev = arg.event.extendedProps.event as EventOut;
-  const tooltip = [arg.event.title, ev.meeting_url].filter(Boolean).join("\n");
+  const tooltip = [arg.event.title, ev.meeting_url].filter(Boolean).join("\n") || undefined;
+  if (arg.view.type.startsWith("timeGrid")) {
+    return (
+      <div title={tooltip}>
+        {arg.event.title}
+        {arg.timeText && <span className="fc-calsync-event-time"> {arg.timeText}</span>}
+      </div>
+    );
+  }
   return (
-    <div title={tooltip || undefined}>
+    <div title={tooltip}>
       {arg.timeText && <span className="fc-calsync-event-time">{arg.timeText} </span>}
       {arg.event.title}
     </div>
@@ -224,11 +263,43 @@ export default function CalendarView({ api }: { api: ApiClient }) {
   );
   loadEventsRef.current = loadEvents;
 
+  // 被り予定の左インセット詰め(compactOverlapLefts)を FullCalendar の再レンダリング後に
+  // DOM へ適用する。FullCalendar は harness の left/right/z-index をインラインスタイルで
+  // 再設定するため、events や表示範囲が変わるたびに rAF で描画確定後に詰め直す。
+  const calendarGridRef = useRef<HTMLDivElement | null>(null);
+  const applyOverlapCompaction = useCallback(() => {
+    const root = calendarGridRef.current;
+    if (!root) return;
+    const cols: HTMLElement[] = Array.from(root.querySelectorAll<HTMLElement>(".fc-timegrid-col-events"));
+    for (const col of cols) {
+      const harnesses: HTMLElement[] = Array.from(
+        col.querySelectorAll<HTMLElement>(":scope > .fc-timegrid-event-harness"),
+      );
+      const items: HarnessGeom[] = harnesses.map((el) => ({
+        top: parseFloat(el.style.top) || 0,
+        level: (parseInt(el.style.zIndex || "1", 10) || 1) - 1,
+        left: parseFloat(el.style.left) || 0,
+      }));
+      compactOverlapLefts(items).forEach((v, i) => {
+        if (v !== null) harnesses[i].style.setProperty("left", `${v}%`, "important");
+      });
+    }
+  }, []);
+  const scheduleCompaction = useCallback(() => {
+    requestAnimationFrame(applyOverlapCompaction);
+  }, [applyOverlapCompaction]);
+
+  useEffect(() => {
+    window.addEventListener("resize", scheduleCompaction);
+    return () => window.removeEventListener("resize", scheduleCompaction);
+  }, [scheduleCompaction]);
+
   const handleDatesSet = useCallback(
     (arg: DatesSetArg) => {
       loadEvents(formatLocalRFC3339(arg.start), formatLocalRFC3339(arg.end), false);
+      scheduleCompaction();
     },
-    [loadEvents],
+    [loadEvents, scheduleCompaction],
   );
 
   const handleRefresh = () => {
@@ -255,6 +326,11 @@ export default function CalendarView({ api }: { api: ApiClient }) {
 
   const fcEvents = useMemo(() => toFullCalendarEvents(events, colorOf), [events, colorOf]);
 
+  // events の変化(FullCalendar が harness を組み直す)後にも詰め直す
+  useEffect(() => {
+    scheduleCompaction();
+  }, [fcEvents, scheduleCompaction]);
+
   return (
     <div className="calendar-view">
       {configError && <p className="error">設定の取得に失敗しました: {configError}</p>}
@@ -278,11 +354,14 @@ export default function CalendarView({ api }: { api: ApiClient }) {
         </div>
       )}
       {loading && <p className="hint">読み込み中…</p>}
-      <div className="calendar-grid">
+      <div className="calendar-grid" ref={calendarGridRef}>
         <FullCalendar
           plugins={[dayGridPlugin, timeGridPlugin, listPlugin]}
           initialView="timeGridWeek"
           headerToolbar={{ left: "prev,next today", center: "title", right: "timeGridWeek,dayGridMonth,listWeek" }}
+          // 週ビューの時刻表示は開始時刻のみ(タイトル先頭表示と合わせて 1 行の情報量を
+          // 増やす。終了時刻は枠の下端とツールチップ・詳細でわかる)
+          views={{ timeGridWeek: { displayEventEnd: false } }}
           // ja ロケールの既定は list ボタンを「予定リスト」にするが、仕様(§2)により
           // 「スケジュール」に上書きする(list 系ビューは listWeek のみ使用)。
           buttonText={{ list: "スケジュール" }}

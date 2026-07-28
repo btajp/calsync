@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { colorForAccount, formatLocalRFC3339, toFullCalendarEvents } from "./CalendarView";
+import { colorForAccount, formatLocalRFC3339, toFullCalendarEvents, compactOverlapLefts } from "./CalendarView";
 import { isHttpsUrl } from "../urlSafety";
 import type { EventOut } from "../types";
 
@@ -171,5 +171,93 @@ describe("toFullCalendarEvents", () => {
     });
     const [out] = toFullCalendarEvents([ev], colorOf);
     expect(out.extendedProps).toEqual({ event: ev });
+  });
+});
+
+describe("compactOverlapLefts", () => {
+  it("長時間ブロックと時間差で重なる予定は 1 段 5% に詰める", () => {
+    const items = [
+      { top: 0, level: 0, left: 0 }, // 終日級の長時間ブロック
+      { top: 120, level: 1, left: 50 },
+      { top: 160, level: 1, left: 50 },
+    ];
+    expect(compactOverlapLefts(items)).toEqual([null, 5, 5]);
+  });
+
+  it("開始位置(top)がほぼ同じ予定同士は横並びを維持する(詰めない)", () => {
+    const items = [
+      { top: 100, level: 0, left: 0 },
+      { top: 102, level: 1, left: 50 }, // 許容誤差内 = 同時開始
+    ];
+    expect(compactOverlapLefts(items)).toEqual([null, null]);
+  });
+
+  it("深い重なりは段数に比例して詰める(2 段目 = 10%)", () => {
+    const items = [
+      { top: 0, level: 0, left: 0 },
+      { top: 60, level: 1, left: 33.3 },
+      { top: 120, level: 2, left: 66.6 },
+    ];
+    expect(compactOverlapLefts(items)).toEqual([null, 5, 10]);
+  });
+
+  it("FullCalendar のインセットの方が既に狭ければ触らない", () => {
+    const items = [
+      { top: 0, level: 0, left: 0 },
+      { top: 60, level: 1, left: 3 },
+    ];
+    expect(compactOverlapLefts(items)).toEqual([null, null]);
+  });
+
+  it("同時開始の相手より上の段でも、時間差の相手しかいなければ詰める", () => {
+    const items = [
+      { top: 0, level: 0, left: 0 },
+      { top: 200, level: 1, left: 50 }, // 下の段(level 0)とは top が離れている
+    ];
+    expect(compactOverlapLefts(items)).toEqual([null, 5]);
+  });
+});
+
+describe("compactOverlapLefts", () => {
+  it("長時間ブロックと時間差で重なる予定は 1 段 5% に詰める", () => {
+    const items = [
+      { top: 0, level: 0, left: 0 }, // 長時間ブロック
+      { top: 120, level: 1, left: 50 },
+      { top: 160, level: 1, left: 50 },
+    ];
+    expect(compactOverlapLefts(items)).toEqual([null, 5, 5]);
+  });
+
+  it("開始位置(top)がほぼ同じ予定同士は横並びを維持する(詰めない)", () => {
+    const items = [
+      { top: 100, level: 0, left: 0 },
+      { top: 102, level: 1, left: 50 }, // 許容誤差内 = 同時開始
+    ];
+    expect(compactOverlapLefts(items)).toEqual([null, null]);
+  });
+
+  it("深い重なりは段数に比例して詰める(2 段目 = 10%)", () => {
+    const items = [
+      { top: 0, level: 0, left: 0 },
+      { top: 60, level: 1, left: 33.3 },
+      { top: 120, level: 2, left: 66.6 },
+    ];
+    expect(compactOverlapLefts(items)).toEqual([null, 5, 10]);
+  });
+
+  it("FullCalendar のインセットの方が既に狭ければ触らない", () => {
+    const items = [
+      { top: 0, level: 0, left: 0 },
+      { top: 60, level: 1, left: 3 },
+    ];
+    expect(compactOverlapLefts(items)).toEqual([null, null]);
+  });
+
+  it("下の段と top が離れていれば詰める(同時開始の相手がいない)", () => {
+    const items = [
+      { top: 0, level: 0, left: 0 },
+      { top: 200, level: 1, left: 50 },
+    ];
+    expect(compactOverlapLefts(items)).toEqual([null, 5]);
   });
 });

@@ -580,9 +580,35 @@ p.error {
    長時間ブロックと重なる予定が半分以下の幅に潰される)。FullCalendar は
    left/right をインラインスタイルで割り当てるため right だけ !important で
    上書きする。z-index は FullCalendar のインライン値のままなので、後の予定が
-   前の予定の右側に重なる Google 風カスケードになる。 */
+   前の予定の右側に重なる Google 風カスケードになる。左インセットは
+   CalendarView の compactOverlapLefts が「1 段 5%」に詰め替える(同時開始の
+   予定同士は横並びを維持)。 */
 .fc .fc-timegrid-event-harness {
   right: 0 !important;
+}
+
+/* 30 分予定でも 1 行が確実に入るようスロットを少し高くする(既定 1.5em。
+   2026-07-29 実機フィードバック: 時刻しか見えずタイトルが読めない) */
+.fc .fc-timegrid-slot {
+  height: 2em;
+}
+
+/* タイトル先頭表示(週ビュー)の時刻はタイトルより控えめにする */
+.fc-calsync-event-time {
+  opacity: 0.85;
+  font-size: 0.92em;
+}
+
+/* 30 分予定でも 1 行が確実に入るようスロットを少し高くする(既定 1.5em。
+   2026-07-29 実機フィードバック: 時刻しか見えずタイトルが読めない) */
+.fc .fc-timegrid-slot {
+  height: 2em;
+}
+
+/* タイトル先頭表示(週ビュー)の時刻はタイトルより控えめにする */
+.fc-calsync-event-time {
+  opacity: 0.85;
+  font-size: 0.92em;
 }
 
 /* 「今日」ジャンプボタン: 押せる状態(今日が表示範囲外)のとき目立たせる */
