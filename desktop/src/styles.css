@@ -696,13 +696,19 @@ p.error {
 /* ホバー全幅展開(2026-07-29 同時刻表示検討・案3): マウスを乗せている間だけ
    全幅+内容の高さまで展開して全文を見せる。クリック不要の中間層。
    compactOverlapLefts の inline left は !important を付けていないため、
-   この :hover の !important が勝つ */
-.fc .fc-timegrid-event-harness:hover {
+   この :hover の !important が勝つ。
+   対象は「自分の前に誰も重なっていない予定」に限定する(:not(-inset)。
+   FullCalendar は stackForward > 0 = 前に他の予定が重なっている背面側の
+   harness に -inset クラスを付ける)— 限定しないと、長時間ブロックに
+   マウスが触れた瞬間にそれが最前面へ上がり、中に重なっている予定を覆い隠して
+   ホバーで狙えなくなる(2026-07-29 実機フィードバック)。背面側の予定の全文は
+   ツールチップとクリックで見る */
+.fc .fc-timegrid-event-harness:not(.fc-timegrid-event-harness-inset):hover {
   left: 0 !important;
   z-index: 60 !important;
 }
 
-.fc .fc-timegrid-event-harness:hover .fc-timegrid-event {
+.fc .fc-timegrid-event-harness:not(.fc-timegrid-event-harness-inset):hover .fc-timegrid-event {
   bottom: auto;
   height: auto;
   min-height: 100%;
@@ -711,7 +717,7 @@ p.error {
 
 /* ホバー展開中は箱の高さが「時間の長さ」ではなく「内容の高さ」になり、% 指定の
    レールの長さが意味を失うため非表示にする(レビュー指摘) */
-.fc .fc-timegrid-event-harness:hover .fc-calsync-cluster-rails {
+.fc .fc-timegrid-event-harness:not(.fc-timegrid-event-harness-inset):hover .fc-calsync-cluster-rails {
   display: none;
 }
 
