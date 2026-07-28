@@ -144,8 +144,10 @@ export function compactOverlapLefts(items: HarnessGeom[], indentPercent = 5, top
  * title 属性のツールチップにタイトル全文(+会議 URL)を出して救済する。
  * 週/日(timeGrid)ビューはタイトルを先頭にする — 30 分予定は最初の 1 行しか
  * 見えず、時刻先頭だと「10:30 - 11:00」だけでタイトルが全く読めない(時刻は
- * グリッド上の位置でわかる。2026-07-29 実機フィードバック)。月/リストは従来
- * どおり時刻先頭。
+ * グリッド上の位置でわかる。2026-07-29 実機フィードバック)。時刻は開始-終了の
+ * 範囲を常に後置し、幅が足りないときは末尾から自然にクリップされるに任せる
+ * (「表示できるときは終了時刻も見えたほうがいい」— 同日フィードバック)。
+ * 月/リストは従来どおり時刻先頭。
  */
 function renderEventContent(arg: EventContentArg) {
   const ev = arg.event.extendedProps.event as EventOut;
@@ -359,9 +361,6 @@ export default function CalendarView({ api }: { api: ApiClient }) {
           plugins={[dayGridPlugin, timeGridPlugin, listPlugin]}
           initialView="timeGridWeek"
           headerToolbar={{ left: "prev,next today", center: "title", right: "timeGridWeek,dayGridMonth,listWeek" }}
-          // 週ビューの時刻表示は開始時刻のみ(タイトル先頭表示と合わせて 1 行の情報量を
-          // 増やす。終了時刻は枠の下端とツールチップ・詳細でわかる)
-          views={{ timeGridWeek: { displayEventEnd: false } }}
           // ja ロケールの既定は list ボタンを「予定リスト」にするが、仕様(§2)により
           // 「スケジュール」に上書きする(list 系ビューは listWeek のみ使用)。
           buttonText={{ list: "スケジュール" }}
