@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isHttpsUrl, zoomAppUrl } from "./urlSafety";
+import { isHttpsUrl, meetingService, zoomAppUrl } from "./urlSafety";
 
 describe("isHttpsUrl", () => {
   it("https のみ true", () => {
@@ -54,5 +54,33 @@ describe("zoomAppUrl", () => {
     expect(zoomAppUrl("https://zoom.us/j/123456789?pwd=a%2Bb")).toBe(
       "zoommtg://zoom.us/join?action=join&confno=123456789&pwd=a%2Bb",
     );
+  });
+});
+
+describe("meetingService", () => {
+  it("Zoom(zoom.us / vanity / zoomgov)を判定する", () => {
+    expect(meetingService("https://zoom.us/j/123456789")?.key).toBe("zoom");
+    expect(meetingService("https://example.zoom.us/j/123456789")?.key).toBe("zoom");
+    expect(meetingService("https://example.zoomgov.com/j/123456789")?.key).toBe("zoom");
+  });
+
+  it("Google Meet を判定する", () => {
+    expect(meetingService("https://meet.google.com/abc-defg-hij")?.key).toBe("meet");
+  });
+
+  it("Microsoft Teams(teams.microsoft.com / teams.live.com)を判定する", () => {
+    expect(meetingService("https://teams.microsoft.com/l/meetup-join/xxx")?.key).toBe("teams");
+    expect(meetingService("https://teams.live.com/meet/12345")?.key).toBe("teams");
+  });
+
+  it("Webex(*.webex.com)を判定する", () => {
+    expect(meetingService("https://example.webex.com/example/j.php?MTID=x")?.key).toBe("webex");
+  });
+
+  it("不明なホスト・suffix 偽装・パース不能は null", () => {
+    expect(meetingService("https://example.com/meet")).toBeNull();
+    expect(meetingService("https://evilzoom.us/j/1")).toBeNull();
+    expect(meetingService("https://meet.google.com.evil.example/x")).toBeNull();
+    expect(meetingService("not a url")).toBeNull();
   });
 });

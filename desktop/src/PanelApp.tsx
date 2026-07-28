@@ -6,7 +6,7 @@ import { ApiClient, ApiError } from "./api";
 import { colorForAccount } from "./pages/CalendarView";
 import EventDetail from "./components/EventDetail";
 import { formatClock, scheduleFetchRange } from "./tray";
-import { isHttpsUrl, zoomAppUrl } from "./urlSafety";
+import { isHttpsUrl, meetingService, zoomAppUrl } from "./urlSafety";
 import type { EventOut } from "./types";
 
 export interface ScheduleItem {
@@ -355,34 +355,44 @@ export default function PanelApp() {
             return (
               <div key={day.dateKey} className="panel-day">
                 <h3>{day.dateLabel}</h3>
-                {day.items.map((item, i) => (
-                  <Fragment key={i}>
-                    {lineIndex === i && (
-                      <div className="panel-now-line" aria-hidden ref={lineIsScrollTarget ? anchorRef : undefined} />
-                    )}
-                    <div
-                      ref={anchorIndex !== null && !lineIsScrollTarget && i === anchorIndex ? anchorRef : undefined}
-                      className="panel-item"
-                      onClick={() => setSelectedItem(item)}
-                    >
-                      <span className="legend-chip" style={{ backgroundColor: colorOf(item.accountId) }} />
-                      <span className="panel-item-time">{item.time}</span>
-                      <span className="panel-item-title">{item.title}</span>
-                      {isHttpsUrl(item.event.meeting_url) && (
-                        <button
-                          className="panel-item-join"
-                          onClick={(e) => {
-                            // 行クリック(詳細ビューへの遷移)と分離する
-                            e.stopPropagation();
-                            joinMeeting(item.event.meeting_url);
-                          }}
-                        >
-                          参加
-                        </button>
+                {day.items.map((item, i) => {
+                  // 参加ボタンにサービス種別を示す(ブランド近似色ドット+ツールチップ。
+                  // 2026-07-28 実機フィードバック。行幅が限られるためテキストは「参加」のまま)。
+                  const canJoin = isHttpsUrl(item.event.meeting_url);
+                  const joinService = canJoin ? meetingService(item.event.meeting_url) : null;
+                  return (
+                    <Fragment key={i}>
+                      {lineIndex === i && (
+                        <div className="panel-now-line" aria-hidden ref={lineIsScrollTarget ? anchorRef : undefined} />
                       )}
-                    </div>
-                  </Fragment>
-                ))}
+                      <div
+                        ref={anchorIndex !== null && !lineIsScrollTarget && i === anchorIndex ? anchorRef : undefined}
+                        className="panel-item"
+                        onClick={() => setSelectedItem(item)}
+                      >
+                        <span className="legend-chip" style={{ backgroundColor: colorOf(item.accountId) }} />
+                        <span className="panel-item-time">{item.time}</span>
+                        <span className="panel-item-title">{item.title}</span>
+                        {canJoin && (
+                          <button
+                            className="panel-item-join"
+                            title={joinService ? `${joinService.label} で参加` : "会議に参加"}
+                            onClick={(e) => {
+                              // 行クリック(詳細ビューへの遷移)と分離する
+                              e.stopPropagation();
+                              joinMeeting(item.event.meeting_url);
+                            }}
+                          >
+                            {joinService && (
+                              <span className="legend-chip" style={{ backgroundColor: joinService.color }} />
+                            )}
+                            参加
+                          </button>
+                        )}
+                      </div>
+                    </Fragment>
+                  );
+                })}
                 {lineIndex === day.items.length && <div className="panel-now-line" aria-hidden />}
               </div>
             );
