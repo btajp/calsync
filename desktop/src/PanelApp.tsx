@@ -6,7 +6,7 @@ import { ApiClient, ApiError } from "./api";
 import { colorForAccount } from "./pages/CalendarView";
 import EventDetail from "./components/EventDetail";
 import { formatClock, scheduleFetchRange } from "./tray";
-import { isHttpsUrl } from "./urlSafety";
+import { isHttpsUrl, zoomAppUrl } from "./urlSafety";
 import type { EventOut } from "./types";
 
 export interface ScheduleItem {
@@ -153,10 +153,18 @@ export default function PanelApp() {
 
   // 詳細を開かずにリスト行から直接会議へ参加する。https 以外はボタン自体を出さない
   // (EventDetail.showJoinButton と同じ方針)ため、ここでの再チェックは防御的。
+  // Zoom の URL は zoommtg:// で Zoom デスクトップアプリを直接開き、開けなければ
+  // ブラウザへフォールバックする(EventDetail.openMeeting と同じ方針)。
   const joinMeeting = (url: string) => {
     if (!isHttpsUrl(url)) return;
     setJoinError(null);
-    open(url).catch((e) => setJoinError(e instanceof Error ? e.message : String(e)));
+    const describe = (e: unknown) => (e instanceof Error ? e.message : String(e));
+    const appUrl = zoomAppUrl(url);
+    if (!appUrl) {
+      open(url).catch((e) => setJoinError(describe(e)));
+      return;
+    }
+    open(appUrl).catch(() => open(url).catch((e) => setJoinError(describe(e))));
   };
 
   // 起動時に listen("api-info") の登録が完了してから emit("panel-ready") を発火する
@@ -197,6 +205,12 @@ export default function PanelApp() {
   const loadEvents = useCallback(
     (retryOnStale = true) => {
       if (!api) return;
+      // 予約済みの stale 再取得はどんな新規取得でも無効化する(CalendarView と同じ
+      // 理由。focus・3 分間隔の取得と二重に走らせない)。
+      if (staleRetryTimerRef.current !== null) {
+        window.clearTimeout(staleRetryTimerRef.current);
+        staleRetryTimerRef.current = null;
+      }
       const { from, to } = scheduleFetchRange(new Date());
       api
         .events(from, to)
@@ -332,14 +346,22 @@ export default function PanelApp() {
             // (2026-07-28 実機フィードバック)。位置は再レンダリング
             // (データ更新・focus)のたびに現在時刻で計算し直す。
             const lineIndex = day.dateKey === todayKey ? nowLineIndex(day.items, new Date()) : null;
+            // 自動スクロールの合わせ先: 開催中の予定が無い通常ケースでは現在時刻ライン
+            // がアンカー項目の直前に来るため、項目を先頭に合わせるとラインだけが上に
+            // 隠れる(レビュー指摘)。ラインが項目以前に来るときはラインへ、開催中が
+            // あるとき(ラインが後ろ)はアンカー項目へ合わせる。
+            const anchorIndex = anchor !== null && day.dateKey === anchor.dateKey ? anchor.index : null;
+            const lineIsScrollTarget = anchorIndex !== null && lineIndex !== null && lineIndex <= anchorIndex;
             return (
               <div key={day.dateKey} className="panel-day">
                 <h3>{day.dateLabel}</h3>
                 {day.items.map((item, i) => (
                   <Fragment key={i}>
-                    {lineIndex === i && <div className="panel-now-line" aria-hidden />}
+                    {lineIndex === i && (
+                      <div className="panel-now-line" aria-hidden ref={lineIsScrollTarget ? anchorRef : undefined} />
+                    )}
                     <div
-                      ref={anchor && day.dateKey === anchor.dateKey && i === anchor.index ? anchorRef : undefined}
+                      ref={anchorIndex !== null && !lineIsScrollTarget && i === anchorIndex ? anchorRef : undefined}
                       className="panel-item"
                       onClick={() => setSelectedItem(item)}
                     >

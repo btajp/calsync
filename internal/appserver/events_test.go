@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -308,5 +309,142 @@ func TestEventsStaleWhileRevalidate(t *testing.T) {
 			t.Fatalf("cache was not refreshed in time, last = %+v", got2)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestEventsRefreshDoesNotClobberWithTotalFailure は、バックグラウンド更新が
+// 「1 件も取れず失敗アカウントあり」(典型はネットワーク断での全滅)の結果を返した
+// とき、既存の stale エントリを空リストで上書きしないことを検証する(レビュー指摘:
+// 上書きすると直前まで表示できていた予定一覧が無警告で「予定なし」に差し替わる)。
+func TestEventsRefreshDoesNotClobberWithTotalFailure(t *testing.T) {
+	s, _ := launchdServer(t)
+	collected := make(chan struct{}, 1)
+	s.CollectEvents = func(ctx context.Context, w model.Window) ([]engine.DigestEntry, []string, error) {
+		select {
+		case collected <- struct{}{}:
+		default:
+		}
+		return nil, []string{"personal", "work-ms"}, nil // 全滅
+	}
+	const path = "/api/events?from=2026-07-05T00:00:00Z&to=2026-07-06T00:00:00Z"
+	key := eventsCacheKey{from: "2026-07-05T00:00:00Z", to: "2026-07-06T00:00:00Z"}
+	staleResp := EventsResponse{
+		Events: []EventOut{{Title: "残るべき予定", AccountID: "personal", AccountIDs: []string{"personal"}}},
+		Failed: []string{},
+	}
+	s.eventsCacheSet(key, staleResp, time.Now().Add(-(eventsCacheTTL + time.Minute)))
+
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	var got EventsResponse
+	if res := get(t, srv, "test-token", path, &got); res.StatusCode != 200 {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	if !got.Stale || len(got.Events) != 1 {
+		t.Fatalf("want stale cached response, got %+v", got)
+	}
+	select {
+	case <-collected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background refresh did not run")
+	}
+	// バックグラウンド更新の完了(eventsRefreshing の解放)を待ってから確認する
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		s.eventsCacheMu.Lock()
+		refreshing := s.eventsRefreshing[key]
+		s.eventsCacheMu.Unlock()
+		if !refreshing {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background refresh did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var got2 EventsResponse
+	if res := get(t, srv, "test-token", path, &got2); res.StatusCode != 200 {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	if len(got2.Events) != 1 || got2.Events[0].Title != "残るべき予定" {
+		t.Fatalf("total-failure refresh must keep the previous entry, got %+v", got2)
+	}
+}
+
+// TestEventsRefreshDiscardsWhenNewerResultCached は lost-update 防止(世代 CAS)の
+// 回帰テスト。バックグラウンド更新の実行中に refresh=1 の同期取得が新しい結果を
+// キャッシュした場合、遅れて完了したバックグラウンド側の古いスナップショットは
+// 破棄されることを検証する(レビュー指摘)。
+func TestEventsRefreshDiscardsWhenNewerResultCached(t *testing.T) {
+	s, _ := launchdServer(t)
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	var calls int
+	var callsMu sync.Mutex
+	s.CollectEvents = func(ctx context.Context, w model.Window) ([]engine.DigestEntry, []string, error) {
+		callsMu.Lock()
+		calls++
+		n := calls
+		callsMu.Unlock()
+		if n == 1 { // 最初の呼び出し = バックグラウンド更新: 解放されるまで待つ
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+			return []engine.DigestEntry{{Title: "古いバックグラウンド結果", AccountIDs: []string{"personal"}}}, nil, nil
+		}
+		return []engine.DigestEntry{{Title: "新しい同期結果", AccountIDs: []string{"personal"}}}, nil, nil
+	}
+	const path = "/api/events?from=2026-07-05T00:00:00Z&to=2026-07-06T00:00:00Z"
+	key := eventsCacheKey{from: "2026-07-05T00:00:00Z", to: "2026-07-06T00:00:00Z"}
+	s.eventsCacheSet(key, EventsResponse{Events: []EventOut{{Title: "初期", AccountID: "personal", AccountIDs: []string{"personal"}}}, Failed: []string{}},
+		time.Now().Add(-(eventsCacheTTL + time.Minute)))
+
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	// stale ヒット → バックグラウンド更新開始(collect 内で停止)
+	var got EventsResponse
+	if res := get(t, srv, "test-token", path, &got); res.StatusCode != 200 || !got.Stale {
+		t.Fatalf("want stale response, status=%d resp=%+v", res.StatusCode, got)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background refresh did not start")
+	}
+
+	// refresh=1 の同期取得が新しい結果をキャッシュする
+	var syncGot EventsResponse
+	if res := get(t, srv, "test-token", path+"&refresh=1", &syncGot); res.StatusCode != 200 {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	if len(syncGot.Events) != 1 || syncGot.Events[0].Title != "新しい同期結果" {
+		t.Fatalf("sync refresh result = %+v", syncGot)
+	}
+
+	// バックグラウンド更新を解放 → 完了(古い結果は世代 CAS で破棄されるべき)
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		s.eventsCacheMu.Lock()
+		refreshing := s.eventsRefreshing[key]
+		s.eventsCacheMu.Unlock()
+		if !refreshing {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background refresh did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var got2 EventsResponse
+	if res := get(t, srv, "test-token", path, &got2); res.StatusCode != 200 {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	if len(got2.Events) != 1 || got2.Events[0].Title != "新しい同期結果" {
+		t.Fatalf("stale background result must be discarded, got %+v", got2)
 	}
 }

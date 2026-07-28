@@ -66,6 +66,11 @@ type eventsCacheKey struct {
 type eventsCacheEntry struct {
 	resp    EventsResponse
 	expires time.Time
+	// gen はエントリ書き込みごとに増える世代番号。バックグラウンド更新(SWR)が
+	// 開始時点の世代を控え、完了時に世代が変わっていたら書き込みを捨てるための
+	// もの(refresh=1 の同期取得が先に新しい結果を書いた場合に、古いスナップ
+	// ショットで上書きする lost-update を防ぐ。レビュー指摘)。
+	gen uint64
 }
 
 // handleEvents は GET /api/events?from=<RFC3339>&to=<RFC3339>&refresh=<0|1> を
@@ -162,6 +167,11 @@ func (s *Server) eventsCacheGet(key eventsCacheKey, now time.Time) (resp EventsR
 func (s *Server) eventsCacheSet(key eventsCacheKey, resp EventsResponse, now time.Time) {
 	s.eventsCacheMu.Lock()
 	defer s.eventsCacheMu.Unlock()
+	s.eventsCacheSetLocked(key, resp, now)
+}
+
+// eventsCacheSetLocked は eventsCacheSet の本体(eventsCacheMu 保持前提)。
+func (s *Server) eventsCacheSetLocked(key eventsCacheKey, resp EventsResponse, now time.Time) {
 	if s.eventsCache == nil {
 		s.eventsCache = make(map[eventsCacheKey]eventsCacheEntry)
 	}
@@ -175,7 +185,21 @@ func (s *Server) eventsCacheSet(key eventsCacheKey, resp EventsResponse, now tim
 			delete(s.eventsCache, k)
 		}
 	}
-	s.eventsCache[key] = eventsCacheEntry{resp: resp, expires: now.Add(eventsCacheTTL)}
+	s.eventsCacheGen++
+	s.eventsCache[key] = eventsCacheEntry{resp: resp, expires: now.Add(eventsCacheTTL), gen: s.eventsCacheGen}
+}
+
+// eventsCacheSetIfGen は key の世代が expect のままのときだけ書き込む
+// (compare-and-set。チェックと書き込みを同一ロック内で行う)。他の書き込み
+// (refresh=1 の同期取得等)が先行していた場合は false を返して何もしない。
+func (s *Server) eventsCacheSetIfGen(key eventsCacheKey, resp EventsResponse, now time.Time, expect uint64) bool {
+	s.eventsCacheMu.Lock()
+	defer s.eventsCacheMu.Unlock()
+	if s.eventsCache[key].gen != expect {
+		return false
+	}
+	s.eventsCacheSetLocked(key, resp, now)
+	return true
 }
 
 // refreshEventsAsync は stale 応答を返した窓をバックグラウンドで取り直し、成功時に
@@ -192,6 +216,10 @@ func (s *Server) refreshEventsAsync(key eventsCacheKey, from, to time.Time) {
 		return
 	}
 	s.eventsRefreshing[key] = true
+	// 開始時点の世代を控える。完了時に世代が進んでいたら(refresh=1 の同期取得等が
+	// 先に書いた)、こちらの古いスナップショットでの上書きを捨てる(レビュー指摘の
+	// lost-update 防止)。
+	startGen := s.eventsCache[key].gen
 	s.eventsCacheMu.Unlock()
 
 	go func() {
@@ -214,11 +242,21 @@ func (s *Server) refreshEventsAsync(key eventsCacheKey, from, to time.Time) {
 			log.Printf("events refresh %s..%s: %v", key.from, key.to, err)
 			return
 		}
+		// 全滅ガード: 1 件も取れず失敗アカウントがある(典型はネットワーク断)結果で
+		// 既存の正常な stale エントリを上書きすると、直前まで表示できていた予定一覧が
+		// 無警告で「予定なし」に差し替わる(PanelApp は failed を表示しない)。この
+		// 場合は既存エントリを温存し、次の同期取得に任せる(レビュー指摘)。
+		if len(entries) == 0 && len(failed) > 0 {
+			log.Printf("events refresh %s..%s: all failed (%v), keeping previous cache entry", key.from, key.to, failed)
+			return
+		}
 		resp := EventsResponse{Events: toEventOut(entries), Failed: failed}
 		if resp.Failed == nil {
 			resp.Failed = []string{}
 		}
-		s.eventsCacheSet(key, resp, time.Now())
+		if !s.eventsCacheSetIfGen(key, resp, time.Now(), startGen) {
+			log.Printf("events refresh %s..%s: discarded (newer result was cached meanwhile)", key.from, key.to)
+		}
 	}()
 }
 

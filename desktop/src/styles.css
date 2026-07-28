@@ -483,9 +483,13 @@ p.error {
 
 /* ===== 現在時刻・今日の強調(2026-07-28 実機フィードバック) ===== */
 
-/* カレンダータブ: 今日の背景の強調(FullCalendar の既定の淡黄色は視認性が弱い) */
+/* カレンダータブ: 今日の背景の強調(FullCalendar の既定の淡黄色は視認性が弱い)と
+   現在時刻ライン(nowIndicator)の色。ラインの色は必ず CSS 変数で指定すること —
+   .fc-timegrid-now-indicator-arrow へ border-color ショートハンドで上書きすると、
+   三角形を作っている transparent の上下 border まで塗って矩形になる(レビュー指摘)。 */
 .fc {
   --fc-today-bg-color: rgba(66, 133, 244, 0.12);
+  --fc-now-indicator-color: #ea4335;
 }
 
 /* 今日の日付ラベルをピル型で強調(週ビューの列見出し・月ビューの日付番号) */
@@ -496,15 +500,6 @@ p.error {
   border-radius: 999px;
   padding: 0.05rem 0.5rem;
   font-weight: 600;
-}
-
-/* 現在時刻ライン(nowIndicator)の色を明示(赤系で統一) */
-.fc .fc-timegrid-now-indicator-line {
-  border-color: #ea4335;
-}
-
-.fc .fc-timegrid-now-indicator-arrow {
-  border-color: #ea4335;
 }
 
 /* 「今日」ジャンプボタン: 押せる状態(今日が表示範囲外)のとき目立たせる */
@@ -526,7 +521,7 @@ p.error {
 .panel-now-line::before {
   content: "";
   position: absolute;
-  left: -2px;
+  left: 0; /* 負値にすると親(overflow 領域)の左端で欠ける(レビュー指摘) */
   top: -5px;
   width: 8px;
   height: 8px;

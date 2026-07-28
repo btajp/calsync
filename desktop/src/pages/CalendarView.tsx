@@ -175,6 +175,14 @@ export default function CalendarView({ api }: { api: ApiClient }) {
 
   const loadEvents = useCallback(
     (from: string, to: string, refresh: boolean, retryOnStale = true) => {
+      // 予約済みの stale 再取得はどんな新規リクエストでも無効化する。残しておくと、
+      // 手動再読み込み(refresh=1・数秒かかる)の in-flight 中にタイマーが発火して
+      // 最新の seq を奪い、後から届く refresh の最新データが isStale() で丸ごと
+      // 破棄される(レビュー指摘: 手動更新が「何も変わらない」ように見える)。
+      if (staleRetryTimerRef.current !== null) {
+        window.clearTimeout(staleRetryTimerRef.current);
+        staleRetryTimerRef.current = null;
+      }
       lastRangeRef.current = { from, to };
       const seq = ++requestSeqRef.current;
       const isStale = () => requestSeqRef.current !== seq;

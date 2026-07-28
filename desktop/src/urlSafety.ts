@@ -24,3 +24,34 @@ export function isHttpsUrl(value: string): boolean {
     return false;
   }
 }
+
+/**
+ * Zoom の会議 URL(https://<host>/j/<confno>?pwd=...)を Zoom デスクトップアプリの
+ * URL スキーム(zoommtg://<host>/join?action=join&confno=...&pwd=...)へ変換する
+ * 純関数(2026-07-28 実機フィードバック: ブラウザを経由せず直接アプリで参加したい)。
+ * 変換できない URL(Zoom 以外のホスト・/my/ 等のパーソナルリンク・confno が数値で
+ * 読めない形)は null を返し、呼び出し側は従来どおりブラウザで開く。ホストを保持する
+ * のは vanity URL(company.zoom.us)や zoomgov.com に対応するため。zoommtg:// は
+ * Rust 側 shell open スコープ(tauri.conf.json の plugins.shell.open)でも許可して
+ * いる(既定スコープは https/http/mailto/tel のみで zoommtg を拒否する)。
+ */
+export function zoomAppUrl(httpsUrl: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(httpsUrl);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:") return null;
+  const host = u.hostname;
+  const isZoomHost =
+    host === "zoom.us" ||
+    host.endsWith(".zoom.us") ||
+    host === "zoomgov.com" ||
+    host.endsWith(".zoomgov.com");
+  if (!isZoomHost) return null;
+  const m = u.pathname.match(/^\/j\/(\d{6,15})$/);
+  if (!m) return null;
+  const pwd = u.searchParams.get("pwd");
+  return `zoommtg://${host}/join?action=join&confno=${m[1]}${pwd ? `&pwd=${encodeURIComponent(pwd)}` : ""}`;
+}

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-shell";
-import { isHttpsUrl } from "../urlSafety";
+import { isHttpsUrl, zoomAppUrl } from "../urlSafety";
 import type { EventOut } from "../types";
 
 export interface DescriptionSegment {
@@ -177,6 +177,20 @@ export default function EventDetail({
     open(url).catch((e) => setOpenError(describeOpenError(e)));
   };
 
+  // 会議参加専用: Zoom の URL は zoommtg:// で Zoom デスクトップアプリを直接開く
+  // (ブラウザの「Zoom を開きますか?」ワンクッションを飛ばす。2026-07-28 実機
+  // フィードバック)。アプリ未インストール等で開けなければブラウザへフォールバック。
+  const openMeeting = (url: string) => {
+    if (!isHttpsUrl(url)) return;
+    setOpenError(null);
+    const appUrl = zoomAppUrl(url);
+    if (!appUrl) {
+      open(url).catch((e) => setOpenError(describeOpenError(e)));
+      return;
+    }
+    open(appUrl).catch(() => open(url).catch((e) => setOpenError(describeOpenError(e))));
+  };
+
   return (
     <div className="event-detail">
       {/* 会議参加はタイトル右側に置く。長い説明文では下部のボタン行までスクロールが
@@ -185,7 +199,7 @@ export default function EventDetail({
       <div className="event-detail-header">
         <h2>{view.title}</h2>
         {view.showJoinButton && (
-          <button className="event-detail-join" onClick={() => openHttps(event.meeting_url)}>
+          <button className="event-detail-join" onClick={() => openMeeting(event.meeting_url)}>
             会議に参加
           </button>
         )}

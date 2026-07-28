@@ -72,6 +72,9 @@ type Server struct {
 	maintSt       maintenanceState
 	eventsCacheMu sync.Mutex
 	eventsCache   map[eventsCacheKey]eventsCacheEntry
+	// eventsCacheGen はエントリ書き込みごとに増える世代カウンタ
+	// (eventsCacheMu 保護。lost-update 防止の CAS 用。events.go)。
+	eventsCacheGen uint64
 	// eventsRefreshing は stale-while-revalidate のバックグラウンド更新の
 	// single-flight ガード(同一窓の並行更新を 1 本に抑える。events.go)。
 	eventsRefreshing map[eventsCacheKey]bool
