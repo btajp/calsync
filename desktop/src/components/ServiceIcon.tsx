@@ -1,20 +1,26 @@
-import { siGooglemeet, siWebex, siZoom } from "simple-icons";
+import { siGooglemeet, siWebex } from "simple-icons";
+import zoomIcon from "../assets/zoom-icon.png";
 import type { MeetingService } from "../urlSafety";
 
 // 会議サービスのロゴアイコン(2026-07-28 実機フィードバック: 単色ドットではなく
-// ロゴにしたい)。パスデータは simple-icons(CC0-1.0)を使う。色は simple-icons の
-// ブランド色を基本に、ダークモードでも見えるよう Webex のみ Cisco のティール系に
-// 差し替える(simple-icons の webex は #000000 で黒背景に沈む)。
-// Microsoft Teams は Microsoft の要請により simple-icons から削除されており
-// (サードパーティのロゴ再現を認めないブランドガイドライン)、商標ロゴの再現を
-// 避けて頭文字バッジ(.service-badge-teams)で代替する。
+// ロゴにしたい)。
+// - Zoom: 公式ブランドアセットのアプリタイル PNG(48x48)を同梱して表示する
+//   (ユーザー提供の公式 CDN 配布アセット。CSP が外部画像を禁止するため同梱必須)
+// - Meet / Webex: simple-icons(CC0-1.0)のパスデータ。色はブランド色を基本に、
+//   ダークモードでも見えるよう Webex のみ Cisco のティール系に差し替える
+//   (simple-icons の webex は #000000 で黒背景に沈む)
+// - Microsoft Teams: Microsoft の要請により simple-icons から削除されており
+//   (サードパーティのロゴ再現を認めないブランドガイドライン)、商標ロゴの再現を
+//   避けて頭文字バッジ(.service-badge-teams)で代替する
 const ICON_PATHS: Partial<Record<MeetingService["key"], { path: string; color: string }>> = {
-  zoom: { path: siZoom.path, color: "#0b5cff" },
   meet: { path: siGooglemeet.path, color: "#00897b" },
   webex: { path: siWebex.path, color: "#00bceb" },
 };
 
 export default function ServiceIcon({ service, size = 14 }: { service: MeetingService; size?: number }) {
+  if (service.key === "zoom") {
+    return <img src={zoomIcon} width={size} height={size} alt="" aria-hidden />;
+  }
   const icon = ICON_PATHS[service.key];
   if (!icon) {
     return (
