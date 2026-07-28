@@ -5,9 +5,9 @@ import timeGridPlugin from "@fullcalendar/timegrid";
 import listPlugin from "@fullcalendar/list";
 import jaLocale from "@fullcalendar/core/locales/ja";
 import type { DatesSetArg, EventClickArg, EventContentArg, EventInput } from "@fullcalendar/core";
-import { open } from "@tauri-apps/plugin-shell";
 import type { ApiClient } from "../api";
 import { ApiError } from "../api";
+import EventDetail from "../components/EventDetail";
 import type { EventOut } from "../types";
 
 // colorPalette はアカウント色の固定パレット。Slack ダイジェストの色割当
@@ -62,7 +62,11 @@ export function formatLocalRFC3339(d: Date): string {
 }
 
 export interface FullCalendarEventInput extends EventInput {
-  extendedProps: { meetingUrl: string; htmlLink: string; accountIds: string[] };
+  // イベントクリック時にアプリ内の詳細モーダル(EventDetail)へそのまま渡せるよう
+  // EventOut 全体を運ぶ(デスクトップ予定詳細設計 2026-07-24 §3.2)。個別フィールド
+  // (meetingUrl/htmlLink/accountIds)を別々に持たせていた旧実装は廃止し、単一の
+  // 情報源(event)に統一した。
+  extendedProps: { event: EventOut };
 }
 
 /**
@@ -92,11 +96,7 @@ export function toFullCalendarEvents(
       allDay: ev.all_day,
       backgroundColor: color,
       borderColor: color,
-      extendedProps: {
-        meetingUrl: ev.meeting_url,
-        htmlLink: ev.html_link,
-        accountIds: ev.account_ids,
-      },
+      extendedProps: { event: ev },
     };
   });
 }
@@ -109,27 +109,6 @@ function describeError(e: unknown): string {
 }
 
 /**
- * capabilities の shell:allow-open にはコマンド単位の scope(URL allowlist)機能が
- * 無い(tauri-plugin-shell 2.3.5 の gen/schemas/acl-manifests.json で確認済み:
- * "Enables the open command without any pre-configured scope")。ただし
- * tauri-plugin-shell の Rust 実装側(open_scope() in lib.rs)には、
- * `tauri.conf.json` に `plugins.shell.open` を明示しない限り既定の検証 regex
- * `^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+` が常に適用される(この設定は
- * 本アプリでは未指定のため既定が有効)。つまり file:/javascript: 等は Rust 側の
- * 既定 regex で既に弾かれるが、この既定は http: にも一致してしまうため、
- * TypeScript 側でさらに https のみへ明示的に絞り込む(html_link は
- * Google/Microsoft のカレンダー API 由来で通常 https。多層防御であり Rust 側の
- * 検証を代替するものではない)。
- */
-export function isHttpsUrl(value: string): boolean {
-  try {
-    return new URL(value).protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-/**
  * イベントの見出し表示。既定の eventContent を上書きしているため、FullCalendar が
  * 本来自動で付ける時刻表示(月ビューの各イベント行の先頭時刻等)が消えてしまう —
  * arg.timeText(終日イベントやタイムグリッド上のイベントでは空文字)を先頭に
@@ -137,9 +116,9 @@ export function isHttpsUrl(value: string): boolean {
  * 表示する(装飾は最小)。
  */
 function renderEventContent(arg: EventContentArg) {
-  const meetingUrl = arg.event.extendedProps.meetingUrl as string;
+  const ev = arg.event.extendedProps.event as EventOut;
   return (
-    <div title={meetingUrl || undefined}>
+    <div title={ev.meeting_url || undefined}>
       {arg.timeText && <span className="fc-calsync-event-time">{arg.timeText} </span>}
       {arg.event.title}
     </div>
@@ -153,7 +132,13 @@ export default function CalendarView({ api }: { api: ApiClient }) {
   const [failed, setFailed] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
-  const [openError, setOpenError] = useState<string | null>(null);
+  // クリックされた予定(モーダル表示中は非 null。デスクトップ予定詳細設計 2026-07-24 §3.2)。
+  const [selectedEvent, setSelectedEvent] = useState<EventOut | null>(null);
+  // 背景クリックで閉じる判定は mousedown がオーバーレイ自身で始まった場合に限る。
+  // click は mousedown/mouseup のターゲットの共通祖先で発火するため、説明文のテキストを
+  // ドラッグ選択してモーダル外でマウスを離すと click のターゲットがオーバーレイになり、
+  // このゲートが無いと選択操作だけでモーダルが閉じてしまう(レビュー指摘)。
+  const overlayMouseDownRef = useRef(false);
   const lastRangeRef = useRef<{ from: string; to: string } | null>(null);
   // リクエスト連番。datesSet の連打(週↔月の素早い切り替え・ドラッグでの範囲変更)で
   // 複数の api.events() が同時に飛んだ場合、後発リクエストより先に古いリクエストの
@@ -215,12 +200,20 @@ export default function CalendarView({ api }: { api: ApiClient }) {
   };
 
   const handleEventClick = (arg: EventClickArg) => {
-    const link = arg.event.extendedProps.htmlLink as string;
-    if (link && isHttpsUrl(link)) {
-      setOpenError(null);
-      open(link).catch((e) => setOpenError(describeError(e)));
-    }
+    setSelectedEvent(arg.event.extendedProps.event as EventOut);
   };
+
+  // Esc でモーダルを閉じる。モーダルが開いている間だけリスナーを登録し、閉じたら
+  // 必ず後片付けする(モーダルを閉じたあとも Esc を拾い続けたり、アンマウント後に
+  // リスナーが残ったりしないように)。
+  useEffect(() => {
+    if (!selectedEvent) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSelectedEvent(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedEvent]);
 
   const fcEvents = useMemo(() => toFullCalendarEvents(events, colorOf), [events, colorOf]);
 
@@ -228,7 +221,6 @@ export default function CalendarView({ api }: { api: ApiClient }) {
     <div className="calendar-view">
       {configError && <p className="error">設定の取得に失敗しました: {configError}</p>}
       {fetchError && <p className="error">予定の取得に失敗しました: {fetchError}</p>}
-      {openError && <p className="error">ブラウザを開けませんでした: {openError}</p>}
       {failed.length > 0 && (
         <div className="banner banner-warning">
           <p>一時的に取得できないアカウント: {failed.join(", ")}。数分後に再試行してください。</p>
@@ -264,6 +256,32 @@ export default function CalendarView({ api }: { api: ApiClient }) {
           eventClick={handleEventClick}
         />
       </div>
+      {selectedEvent && (
+        // 背景クリックで閉じる(mousedown と click の両方がオーバーレイ自身のときのみ。
+        // overlayMouseDownRef のコメント参照)。モーダル本体側は stopPropagation で
+        // バブリングを止め、中身のクリックでは閉じないようにする
+        // (デスクトップ予定詳細設計 2026-07-24 §3.2)。
+        <div
+          className="modal-overlay"
+          onMouseDown={(e) => {
+            overlayMouseDownRef.current = e.target === e.currentTarget;
+          }}
+          onClick={(e) => {
+            if (overlayMouseDownRef.current && e.target === e.currentTarget) setSelectedEvent(null);
+          }}
+        >
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="modal-close"
+              onClick={() => setSelectedEvent(null)}
+              aria-label="閉じる"
+            >
+              ✕
+            </button>
+            <EventDetail event={selectedEvent} colorOf={colorOf} onClose={() => setSelectedEvent(null)} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -98,7 +98,7 @@ func TestEventsMapsFakeCollectEvents(t *testing.T) {
 			{
 				Title: "設計レビュー", StartUTC: start, EndUTC: start.Add(time.Hour),
 				AccountIDs: []string{"personal", "work-ms"}, HTMLLink: "https://cal/x",
-				MeetingURL: "https://zoom.us/j/1",
+				MeetingURL: "https://zoom.us/j/1", Description: "議題:\n- A\n- B",
 			},
 			{
 				Title: "終日イベント", IsAllDay: true, AllDayStart: "2026-07-05",
@@ -122,6 +122,9 @@ func TestEventsMapsFakeCollectEvents(t *testing.T) {
 	}
 	if ev.Title != "設計レビュー" || ev.HTMLLink != "https://cal/x" || ev.MeetingURL != "https://zoom.us/j/1" {
 		t.Fatalf("event[0] display fields = %+v", ev)
+	}
+	if ev.Description != "議題:\n- A\n- B" {
+		t.Fatalf("event[0] description = %+v", ev)
 	}
 	if ev.Start != "2026-07-05T10:00:00Z" || ev.End != "2026-07-05T11:00:00Z" || ev.AllDay {
 		t.Fatalf("event[0] time fields = %+v", ev)

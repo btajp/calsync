@@ -32,7 +32,7 @@ describe("buildScheduleList", () => {
     expect(days).toHaveLength(1);
     expect(days[0].dateKey).toBe("2026-07-21");
     expect(days[0].dateLabel).toBe("7/21(火)");
-    expect(days[0].items).toEqual([{ time: "14:00", title: "週次定例", accountId: "personal" }]);
+    expect(days[0].items).toEqual([{ time: "14:00", title: "週次定例", accountId: "personal", event: ev }]);
   });
 
   it("終日イベントは all_day_start の日付でグループ化し time を「終日」にする", () => {
@@ -44,7 +44,13 @@ describe("buildScheduleList", () => {
     });
     const days = buildScheduleList([ev], NOW);
     expect(days[0].dateKey).toBe("2026-07-23");
-    expect(days[0].items).toEqual([{ time: "終日", title: "祝日", accountId: "personal" }]);
+    expect(days[0].items).toEqual([{ time: "終日", title: "祝日", accountId: "personal", event: ev }]);
+  });
+
+  it("各 ScheduleItem は元の EventOut への参照を持ち回す(EventDetail へそのまま渡すため)", () => {
+    const ev = baseEvent({ title: "詳細参照", start: "2026-07-21T09:00:00+09:00" });
+    const days = buildScheduleList([ev], NOW);
+    expect(days[0].items[0].event).toBe(ev);
   });
 
   it("同じ日の終日イベントは時刻ありイベントより先頭に来る", () => {

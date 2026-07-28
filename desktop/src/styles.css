@@ -334,6 +334,11 @@ p.error {
   gap: 0.5rem;
   padding: 0.3rem 0;
   font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.panel-item:hover {
+  background: rgba(127, 127, 127, 0.12);
 }
 
 .panel-item-time {
@@ -347,4 +352,84 @@ p.error {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ポップオーバー内の予定詳細ビュー(デスクトップ予定詳細設計 2026-07-24 §3.3)。
+   panel-list と同じくポップオーバーの固定高さ内でスクロールできるようにする。 */
+.panel-detail {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* カレンダータブのイベントクリック→詳細モーダル(デスクトップ予定詳細設計 2026-07-24 §3.2)。
+   背景クリックで閉じられるよう、オーバーレイ自身が onClick を受け取る(中身のクリックは
+   stopPropagation で止める)。 */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  position: relative;
+  width: min(480px, 90vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 1.25rem 1.5rem;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111111;
+}
+
+@media (prefers-color-scheme: dark) {
+  .modal-content {
+    background: #1e1e1e;
+    color: #f0f0f0;
+  }
+}
+
+.modal-close {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  border: none;
+  padding: 0.25rem 0.5rem;
+  background: transparent;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* 予定詳細部品(EventDetail)。カレンダーのモーダル・ポップオーバーの両方で共用する
+   (デスクトップ予定詳細設計 2026-07-24 §3.1)。 */
+.event-detail h2 {
+  margin: 0 0.5rem 0.5rem 0; /* 右上の ✕(.modal-close)とタイトルが重ならない余白 */
+  font-size: 1.1rem;
+}
+
+.event-detail-datetime {
+  margin: 0 0 0.5rem;
+  opacity: 0.85;
+  font-size: 0.9rem;
+}
+
+.event-detail-accounts {
+  margin-bottom: 0.75rem;
+}
+
+.event-detail-description {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin-bottom: 1rem;
+}
+
+.description-link {
+  color: #4285f4;
+  text-decoration: underline;
+  cursor: pointer;
 }
