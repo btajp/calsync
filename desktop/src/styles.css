@@ -703,6 +703,14 @@ p.error {
    マウスが触れた瞬間にそれが最前面へ上がり、中に重なっている予定を覆い隠して
    ホバーで狙えなくなる(2026-07-29 実機フィードバック)。背面側の予定の全文は
    ツールチップとクリックで見る */
+/* すべての予定に共通の軽いホバーフィードバック。背面(-inset)の予定は展開しない
+   (0.6.1)ため、これが無いとマウスオーバーしていることが分からない
+   (2026-07-31 実機フィードバック)。展開する予定にも同じ変化を掛けて一貫させる */
+.fc .fc-timegrid-event:hover {
+  filter: brightness(1.08);
+  cursor: pointer;
+}
+
 .fc .fc-timegrid-event-harness:not(.fc-timegrid-event-harness-inset):hover {
   left: 0 !important;
   z-index: 60 !important;
