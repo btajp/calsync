@@ -214,20 +214,27 @@ func (c *Client) ListBlockers(ctx context.Context, cal model.CalendarRef, window
 	base := fmt.Sprintf(
 		"singleValueExtendedProperties/Any(ep: ep/id eq '%s' and ep/value ne null)",
 		originPropertyID)
-	bounded := base + fmt.Sprintf(" and end/dateTime ge '%s'",
+	// gt(排他)は Google の TimeMin(「終了の排他的下限」)・engine.EndsBeforeWindow・
+	// fake と境界を揃えるため
+	bounded := base + fmt.Sprintf(" and end/dateTime gt '%s'",
 		window.Start.UTC().Format("2006-01-02T15:04:05"))
-	records, status, err := c.listBlockersFiltered(ctx, bounded)
+	records, status, err := c.listBlockersFiltered(ctx, bounded, window.Start)
 	if err != nil && status == http.StatusBadRequest {
-		log.Printf("graph list blockers: time-bounded filter rejected, falling back to unbounded: %v", err)
-		records, _, err = c.listBlockersFiltered(ctx, base)
+		// フォールバック時もクライアント側の時刻下限(listBlockersFiltered の minEnd)は
+		// 効いたままなので、「過去ブロッカーを列挙しない」契約は保たれる(検証指摘:
+		// これが無いと DB 全損時にフェーズ0が過去分を収容 → 汚染掃除が全削除する
+		// 元欠陥がフォールバック経路で再発する)。増えるのは列挙 API コストのみ
+		log.Printf("graph list blockers: time-bounded filter rejected, falling back to unbounded listing: %v", err)
+		records, _, err = c.listBlockersFiltered(ctx, base, window.Start)
 	}
 	return records, err
 }
 
-// listBlockersFiltered は指定 $filter でブロッカーを列挙する。エラー時は
-// 呼び出し元がフォールバック判断に使えるよう HTTP ステータスも返す
-// (HTTP 層以外のエラーは status 0)。
-func (c *Client) listBlockersFiltered(ctx context.Context, filter string) ([]model.BlockerRecord, int, error) {
+// listBlockersFiltered は指定 $filter でブロッカーを列挙する。minEndExclusive は
+// クライアント側の時刻下限(終了がこれ以前のブロッカーを除外。サーバー側 $filter の
+// 有無に関わらず常に適用する二重防御)。エラー時は呼び出し元がフォールバック判断に
+// 使えるよう HTTP ステータスも返す(HTTP 層以外のエラーは status 0)。
+func (c *Client) listBlockersFiltered(ctx context.Context, filter string, minEndExclusive time.Time) ([]model.BlockerRecord, int, error) {
 	q := url.Values{}
 	q.Set("$filter", filter)
 	listURL := c.baseURL + "/me/events?" + encodeQuery(q)
@@ -251,9 +258,12 @@ func (c *Client) listBlockersFiltered(ctx context.Context, filter string) ([]mod
 			return nil, 0, fmt.Errorf("graph list blockers: decode: %w", err)
 		}
 		for _, item := range page.Value {
-			rec, err := c.getBlockerRecord(ctx, item.ID)
+			rec, nev, err := c.getBlockerRecord(ctx, item.ID)
 			if err != nil {
 				return nil, 0, err
+			}
+			if blockerEndsBefore(nev, minEndExclusive) {
+				continue
 			}
 			records = append(records, rec)
 		}
@@ -262,18 +272,35 @@ func (c *Client) listBlockersFiltered(ctx context.Context, filter string) ([]mod
 	return records, http.StatusOK, nil
 }
 
+// blockerEndsBefore は engine.EndsBeforeWindow と同じ近似(終日は AllDayEnd の
+// UTC 日付・パース不能や時刻ゼロは false = 除外しない)での過去判定。
+func blockerEndsBefore(nev model.NormalizedEvent, minEndExclusive time.Time) bool {
+	if nev.IsAllDay {
+		end, err := time.Parse("2006-01-02", nev.AllDayEnd)
+		if err != nil {
+			return false
+		}
+		return !end.After(minEndExclusive)
+	}
+	if nev.EndUTC.IsZero() {
+		return false
+	}
+	return !nev.EndUTC.After(minEndExclusive)
+}
+
 // getBlockerRecord fetches one event with $expand to read the origin tag
-// value and computes its TimeHash.
-func (c *Client) getBlockerRecord(ctx context.Context, eventID string) (model.BlockerRecord, error) {
+// value and computes its TimeHash. 時刻情報(nev)も返し、呼び出し元の
+// クライアント側時刻下限フィルタに使う。
+func (c *Client) getBlockerRecord(ctx context.Context, eventID string) (model.BlockerRecord, model.NormalizedEvent, error) {
 	q := url.Values{}
 	q.Set("$expand", fmt.Sprintf("singleValueExtendedProperties($filter=id eq '%s')", originPropertyID))
 	status, body, err := c.doRead(ctx, http.MethodGet,
 		c.baseURL+"/me/events/"+url.PathEscape(eventID)+"?"+encodeQuery(q), nil)
 	if err != nil {
-		return model.BlockerRecord{}, err
+		return model.BlockerRecord{}, model.NormalizedEvent{}, err
 	}
 	if status != http.StatusOK {
-		return model.BlockerRecord{}, fmt.Errorf("graph get blocker %s: status %d: %s", eventID, status, body)
+		return model.BlockerRecord{}, model.NormalizedEvent{}, fmt.Errorf("graph get blocker %s: status %d: %s", eventID, status, body)
 	}
 	var ev struct {
 		ID                            string            `json:"id"`
@@ -283,7 +310,7 @@ func (c *Client) getBlockerRecord(ctx context.Context, eventID string) (model.Bl
 		SingleValueExtendedProperties []singleValueProp `json:"singleValueExtendedProperties"`
 	}
 	if err := json.Unmarshal(body, &ev); err != nil {
-		return model.BlockerRecord{}, fmt.Errorf("graph get blocker %s: decode: %w", eventID, err)
+		return model.BlockerRecord{}, model.NormalizedEvent{}, fmt.Errorf("graph get blocker %s: decode: %w", eventID, err)
 	}
 	rec := model.BlockerRecord{EventID: ev.ID}
 	for _, p := range ev.SingleValueExtendedProperties {
@@ -295,25 +322,25 @@ func (c *Client) getBlockerRecord(ctx context.Context, eventID string) (model.Bl
 	if ev.IsAllDay {
 		s, err := datePart(ev.Start.DateTime)
 		if err != nil {
-			return model.BlockerRecord{}, err
+			return model.BlockerRecord{}, model.NormalizedEvent{}, err
 		}
 		e, err := datePart(ev.End.DateTime)
 		if err != nil {
-			return model.BlockerRecord{}, err
+			return model.BlockerRecord{}, model.NormalizedEvent{}, err
 		}
 		nev.AllDayStart, nev.AllDayEnd = s, e
 	} else {
 		var s, e time.Time
 		if s, err = ev.Start.utc(); err != nil {
-			return model.BlockerRecord{}, err
+			return model.BlockerRecord{}, model.NormalizedEvent{}, err
 		}
 		if e, err = ev.End.utc(); err != nil {
-			return model.BlockerRecord{}, err
+			return model.BlockerRecord{}, model.NormalizedEvent{}, err
 		}
 		nev.StartUTC, nev.EndUTC = s, e
 	}
 	rec.TimeHash = model.TimeHash(nev)
-	return rec, nil
+	return rec, nev, nil
 }
 
 // GetCalendarTimezone implements provider.Provider. It returns the

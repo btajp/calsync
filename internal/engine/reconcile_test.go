@@ -961,8 +961,11 @@ func TestPromoteSuppressed_PastOriginDoesNotCreate(t *testing.T) {
 	ctx := context.Background()
 	origin, real := dupPair(false)
 
-	// b 上の同一会議 busy 実予定により a-ev の b 向けは suppressed になる
-	require.NoError(t, e.Store.UpsertEvent(calBv, real))
+	// b の実予定を通常配布してから(削除通知が未知IDガードで素通りしないよう
+	// mappings を持たせる。検証指摘: UpsertEvent だけでは削除通知が
+	// len(maps)==0 の早期リターンで promoteSuppressed に到達せず空撃ちになる)、
+	// b 上の同一会議 busy 実予定により a-ev の b 向けを suppressed にする
+	require.NoError(t, e.processEvent(ctx, calBv, real))
 	require.NoError(t, e.processEvent(ctx, refA, origin))
 	require.Empty(t, f.Blockers(calBv))
 

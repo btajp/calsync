@@ -325,7 +325,7 @@ func TestListBlockers(t *testing.T) {
 	require.Equal(t, "/me/events", u0.Path)
 	require.Equal(t,
 		"singleValueExtendedProperties/Any(ep: ep/id eq '"+wantOriginPropID+"' and ep/value ne null)"+
-			" and end/dateTime ge '"+testWindow.Start.UTC().Format("2006-01-02T15:04:05")+"'",
+			" and end/dateTime gt '"+testWindow.Start.UTC().Format("2006-01-02T15:04:05")+"'",
 		u0.Query().Get("$filter"))
 	require.Contains(t, reqs[0].URL, "%7Bb7dbd76c-3a35-4b41-9d80-6a3f31f2a6b9%7D")
 
@@ -489,7 +489,14 @@ func TestListBlockersFallsBackWhenTimeFilterRejected(t *testing.T) {
 			fmt.Fprint(w, `{"error":{"code":"ErrorInvalidUrlQueryFilter"}}`)
 			return
 		}
-		fmt.Fprint(w, `{"value":[{"id":"blk-1"}]}`)
+		// フォールバック(条件なし列挙)は過去ブロッカー blk-0 も返してくる
+		fmt.Fprint(w, `{"value":[{"id":"blk-0"},{"id":"blk-1"}]}`)
+	})
+	mux.HandleFunc("/me/events/blk-0", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"id":"blk-0","isAllDay":false,
+			"start":{"dateTime":"2026-07-01T01:00:00.0000000","timeZone":"UTC"},
+			"end":{"dateTime":"2026-07-01T02:00:00.0000000","timeZone":"UTC"},
+			"singleValueExtendedProperties":[{"id":"String {b7dbd76c-3a35-4b41-9d80-6a3f31f2a6b9} Name calsyncOrigin","value":"personal:ev0"}]}`)
 	})
 	mux.HandleFunc("/me/events/blk-1", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"id":"blk-1","isAllDay":false,
@@ -503,9 +510,9 @@ func TestListBlockersFallsBackWhenTimeFilterRejected(t *testing.T) {
 	c := newTestClient(t, srv.URL, []string{"busy"})
 	recs, err := c.ListBlockers(context.Background(), testCal, testWindow)
 	require.NoError(t, err)
-	require.Len(t, recs, 1)
+	require.Len(t, recs, 1, "過去ブロッカー(blk-0)はクライアント側の時刻下限で除外される")
 	require.Equal(t, "blk-1", recs[0].EventID)
 	require.Len(t, filters, 2, "時刻下限付き → 拒否 → 条件なしで再試行の 2 回")
-	require.Contains(t, filters[0], "end/dateTime ge")
+	require.Contains(t, filters[0], "end/dateTime gt")
 	require.NotContains(t, filters[1], "end/dateTime")
 }
