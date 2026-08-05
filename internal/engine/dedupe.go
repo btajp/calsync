@@ -54,6 +54,12 @@ func (e *Engine) promoteSuppressed(ctx context.Context, targetAccountID, icalUID
 		if target == nil {
 			continue // 設定から消えたアカウント。掃除は accounts remove の責務
 		}
+		// 過去側ガード(2026-08-05 仕様変更): 過去向けに新規ブロッカーは作らない。
+		// origin が既に終わっている suppressed は昇格せず行を残す(過去の時間帯に
+		// 突然「予定あり」が湧くのを防ぐ。reevaluateSuppressed も同じガードを持つ)
+		if EndsBeforeWindow(e.currentWindow(), *ev) {
+			continue
+		}
 		// 同一会議の別の実予定がまだ残っていれば昇格しない
 		dup, err := e.isDuplicateOnTarget(*target, *ev)
 		if err != nil {

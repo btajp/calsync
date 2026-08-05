@@ -146,7 +146,21 @@ func (e *Engine) processEvent(ctx context.Context, ref model.CalendarRef, ev mod
 	}
 
 	// 決定則3: ウィンドウ外(クライアント側判定が正。仕様5.3)
-	if !InWindow(e.currentWindow(), ev) {
+	if w := e.currentWindow(); !InWindow(w, ev) {
+		// 過去側ガード(2026-08-05 仕様変更): もともと過去だった予定の編集通知では
+		// ブロッカーを消さない(終わった予定のブロッカーは保持する)。キャッシュ上の
+		// 旧版もウィンドウ開始より前に終わっている場合のみ「過去のままの編集」と
+		// みなす — 旧版がウィンドウ内なら「ウィンドウ内から過去へ移動」であり、
+		// 移動元の時間帯のブロッカーは従来どおり削除する。
+		if EndsBeforeWindow(w, ev) {
+			cached, err := e.Store.GetEvent(ref, ev.ID)
+			if err != nil {
+				return err
+			}
+			if cached != nil && EndsBeforeWindow(w, *cached) {
+				return nil
+			}
+		}
 		return e.deleteBlockersForOrigin(ctx, ref, ev.ID)
 	}
 

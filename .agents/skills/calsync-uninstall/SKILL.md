@@ -77,6 +77,7 @@ rm -rf desktop/src-tauri/target   # デスクトップアプリ(desktop/)を使�
 | 症状 / 誘惑 | 正しい対応 |
 | --- | --- |
 | 先に `./data` を消してしまった | リモートのブロッカーは API では消せない。各カレンダーでタイトル(既定「予定あり」)を検索して手動削除 |
+| 過去(終了済み)のブロッカーが `accounts remove` 後も残っている | 2026-08-05 以降、終了済み予定のブロッカーは履歴として保持される仕様。通常は mappings 管理下なので `accounts remove` で消えるが、**DB 全損から再構築した場合の過去分は管理外**となり残る。各カレンダーでタイトル検索して手動削除 |
 | calsync.yaml から先にアカウントを消した | `accounts remove` が provider を組めない。エントリを一旦戻してから remove する |
 | デーモン稼働中に `accounts remove` が失敗する | flock による正常な排他。Step 1 の停止を先に |
 | `reauth_required` のアカウントがある | `--force` の前に `auth add <id>` で復活させてから remove(リモートも消える) |

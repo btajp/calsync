@@ -77,6 +77,19 @@ func (e *Engine) FullResync(ctx context.Context, ref model.CalendarRef) error {
 		if err != nil {
 			return err
 		}
+		// 過去側ガード(2026-08-05 仕様変更): ウィンドウ開始より前に終わった予定は
+		// 「範囲外に出た消滅」扱いにせず、ブロッカー・mapping・キャッシュとも保持する。
+		// 「過去方向は同期しない」は“過去向けに作らない”ことであり、“終わった予定の
+		// ブロッカーを消す”ことではない(ユーザー要件)。キャッシュ行ごと残すのは、
+		// cleanStaleMappings の汚染判定・restore・ループ防止が「origin がキャッシュに
+		// 実在する」ことを前提にしているため。判定はキャッシュ上の最終版の時刻で行う
+		// (ウィンドウ内から過去へ動かされた直後はキャッシュがウィンドウ内の旧時刻の
+		// ままなので、従来どおり掃除される)。過去の origin が実カレンダーから削除
+		// された場合、削除通知(決定則1)が届けば従来どおり掃除されるが、Graph delta の
+		// ようにウィンドウ外の削除通知が届かない経路では保持側に倒れる(既知の限界)。
+		if cached != nil && EndsBeforeWindow(w, *cached) {
+			continue
+		}
 		if err := e.deleteBlockersForOrigin(ctx, ref, id); err != nil {
 			errs = append(errs, err)
 			if onlyTargetAuthErrors(err) {
@@ -198,6 +211,16 @@ func (e *Engine) resolvePending(ctx context.Context) error {
 			continue
 		}
 		if ev == nil {
+			if err := e.Store.DeleteMapping(m.OriginAccount, m.OriginCalendar, m.OriginEventID, m.TargetAccount); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		// 過去側ガード(2026-08-05 仕様変更): 過去向けに新規ブロッカーは作らない。
+		// 作成途中クラッシュの intent の origin が既に終わっていた場合は intent を
+		// 破棄する(クラッシュ前に作成まで済んでいた場合は孤児として残るが、
+		// 時刻下限付きの ListBlockers には現れないため以後触られない)
+		if EndsBeforeWindow(e.currentWindow(), *ev) {
 			if err := e.Store.DeleteMapping(m.OriginAccount, m.OriginCalendar, m.OriginEventID, m.TargetAccount); err != nil {
 				errs = append(errs, err)
 			}
@@ -447,6 +470,14 @@ func (e *Engine) restoreMissingBlockers(ctx context.Context) error {
 			if ev == nil {
 				continue // origin がキャッシュに無い → 次回 FullResync が整合を回復する
 			}
+			// 過去側ガード(2026-08-05 仕様変更): 終わった予定のブロッカーは保持する
+			// だけで復元はしない。Google の ListBlockers はウィンドウ内しか列挙しない
+			// ため、ここを素通しにすると過去のブロッカーが毎回「消えている」と誤認され
+			// 再作成が走り続ける。また、手で消された過去のブロッカーは消えたままにする
+			// (「元予定が生きている限り維持」の確定仕様はウィンドウ内にのみ適用)。
+			if EndsBeforeWindow(w, *ev) {
+				continue
+			}
 			if err := e.createFromMapping(ctx, m, *ev); err != nil {
 				errs = append(errs, err)
 			}
@@ -486,6 +517,11 @@ func (e *Engine) reevaluateSuppressed(ctx context.Context) error {
 			}
 			target := e.Cfg.AccountByID(m.TargetAccount)
 			if target == nil {
+				continue
+			}
+			// 過去側ガード(2026-08-05 仕様変更): 過去向けに新規ブロッカーは作らない
+			// (promoteSuppressed と同じ。過去の時間帯に突然「予定あり」が湧くのを防ぐ)
+			if EndsBeforeWindow(e.currentWindow(), *ev) {
 				continue
 			}
 			dup, err := e.isDuplicateOnTarget(*target, *ev)

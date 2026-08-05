@@ -841,3 +841,219 @@ func TestReconcile_RebuildSelfHealsWithDetailSyncPair(t *testing.T) {
 		model.TimeHash(ev)+"+detail:"+model.DetailHash(true, false, ev.Title, ev.Description),
 		m.TimeHash)
 }
+
+// 過去側ガード(2026-08-05 仕様変更): 終わった予定はウィンドウがスライドしても
+// ブロッカー・mapping・キャッシュを保持する(「過去方向は同期しない」は“作らない”
+// ことであって“終わった予定のブロッカーを消す”ことではない)
+func TestFullResync_KeepsPastBlockers(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	ev := busyEvent("ev-past")
+	f.SetFullState(refA, []model.NormalizedEvent{ev})
+	require.NoError(t, e.SyncCalendar(ctx, refA))
+	require.Len(t, f.Blockers(calBv), 1)
+
+	// 10 日後: ev は終了済みで、新ウィンドウ(now〜+3mo)のフル同期には現れない
+	f.SetFullState(refA, nil)
+	e.Now = func() time.Time { return testNow.AddDate(0, 0, 10) }
+
+	require.NoError(t, e.FullResync(ctx, refA))
+
+	require.Len(t, f.Blockers(calBv), 1, "過去のブロッカーは掃除しない")
+	require.Len(t, f.Blockers(calCv), 1)
+	m, err := e.Store.GetMapping("a", "primary", "ev-past", "b")
+	require.NoError(t, err)
+	require.NotNil(t, m, "mapping はループ防止のため保持する")
+	require.Equal(t, store.StatusActive, m.Status)
+	cached, err := e.Store.GetEvent(refA, "ev-past")
+	require.NoError(t, err)
+	require.NotNil(t, cached, "キャッシュ行は汚染判定・restore の前提として保持する")
+}
+
+// 過去のブロッカーは Reconcile 全体(cleanStaleMappings・adoption 含む)を通しても残る
+func TestReconcile_KeepsPastBlockers(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	ev := busyEvent("ev-past")
+	f.SetFullState(refA, []model.NormalizedEvent{ev})
+	require.NoError(t, e.SyncCalendar(ctx, refA))
+	require.Len(t, f.Blockers(calBv), 1)
+
+	f.SetFullState(refA, nil)
+	f.SetFullState(model.CalendarRef{AccountID: "b", CalendarID: "primary"}, nil)
+	f.SetFullState(model.CalendarRef{AccountID: "c", CalendarID: "primary"}, nil)
+	e.Now = func() time.Time { return testNow.AddDate(0, 0, 10) }
+
+	require.NoError(t, e.Reconcile(ctx))
+
+	require.Len(t, f.Blockers(calBv), 1, "日次リコンサイル後も過去のブロッカーは残る")
+	m, err := e.Store.GetMapping("a", "primary", "ev-past", "b")
+	require.NoError(t, err)
+	require.NotNil(t, m)
+	require.Equal(t, store.StatusActive, m.Status)
+}
+
+// 過去のままの予定の編集通知(決定則3)ではブロッカーを消さない
+func TestProcessEvent_PastEventEditKeepsBlocker(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	ev := busyEvent("ev-a")
+	f.SetFullState(refA, []model.NormalizedEvent{ev})
+	require.NoError(t, e.SyncCalendar(ctx, refA))
+	require.Len(t, f.Blockers(calBv), 1)
+
+	// 時が進み ev は終了済み。タイトルだけ編集された通知が届く(時刻は過去のまま)
+	e.Now = func() time.Time { return testNow.AddDate(0, 0, 10) }
+	edited := ev
+	edited.Title = "編集後"
+	require.NoError(t, e.processEvent(ctx, refA, edited))
+	require.Len(t, f.Blockers(calBv), 1, "過去のままの編集ではブロッカーを保持する")
+}
+
+// ウィンドウ内から過去へ移動された予定(決定則3)は従来どおりブロッカーを削除する
+// (移動元の時間帯に古いブロッカーが残らないように)
+func TestProcessEvent_MovedToPastDeletesBlocker(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	ev := busyEvent("ev-m")
+	f.SetFullState(refA, []model.NormalizedEvent{ev})
+	require.NoError(t, e.SyncCalendar(ctx, refA))
+	require.Len(t, f.Blockers(calBv), 1)
+
+	moved := ev
+	moved.StartUTC = testNow.Add(-3 * time.Hour)
+	moved.EndUTC = testNow.Add(-2 * time.Hour)
+	require.NoError(t, e.processEvent(ctx, refA, moved))
+	require.Empty(t, f.Blockers(calBv), "過去への移動は従来どおり削除")
+}
+
+// 手で消された過去のブロッカーは復元しない(「元予定が生きている限り維持」は
+// ウィンドウ内にのみ適用。Google の ListBlockers がウィンドウ外を列挙しないため、
+// 素通しにすると過去分の再作成が毎回走り続ける問題も防ぐ)
+func TestReconcile_DoesNotRestorePastBlocker(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	ev := busyEvent("ev-past")
+	f.SetFullState(refA, []model.NormalizedEvent{ev})
+	require.NoError(t, e.SyncCalendar(ctx, refA))
+
+	before, err := e.Store.GetMapping("a", "primary", "ev-past", "b")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+
+	// 時が進んで過去になったあと、手でブロッカーを削除する
+	f.SetFullState(refA, nil)
+	f.SetFullState(model.CalendarRef{AccountID: "b", CalendarID: "primary"}, nil)
+	f.SetFullState(model.CalendarRef{AccountID: "c", CalendarID: "primary"}, nil)
+	e.Now = func() time.Time { return testNow.AddDate(0, 0, 10) }
+	require.NoError(t, f.DeleteBlocker(ctx, calBv, before.BlockerEventID))
+	require.Empty(t, f.Blockers(calBv))
+
+	require.NoError(t, e.Reconcile(ctx))
+
+	require.Empty(t, f.Blockers(calBv), "過去のブロッカーは復元しない")
+}
+
+// 過去側ガード(レビュー指摘): 過去の重複実予定が削除されても suppressed を昇格して
+// 「過去の時間帯に新規ブロッカー」を作らない(promoteSuppressed のガード)
+func TestPromoteSuppressed_PastOriginDoesNotCreate(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	origin, real := dupPair(false)
+
+	// b の実予定を通常配布してから(削除通知が未知IDガードで素通りしないよう
+	// mappings を持たせる。検証指摘: UpsertEvent だけでは削除通知が
+	// len(maps)==0 の早期リターンで promoteSuppressed に到達せず空撃ちになる)、
+	// b 上の同一会議 busy 実予定により a-ev の b 向けを suppressed にする
+	require.NoError(t, e.processEvent(ctx, calBv, real))
+	require.NoError(t, e.processEvent(ctx, refA, origin))
+	require.Empty(t, f.Blockers(calBv))
+
+	// 時が進み双方とも過去に。ユーザーが b 上の過去の実予定を削除した通知が届く
+	// (Google の増分同期は過去の削除も届ける)
+	e.Now = func() time.Time { return testNow.AddDate(0, 0, 10) }
+	require.NoError(t, e.processEvent(ctx, calBv, model.NormalizedEvent{ID: "b-ev", Deleted: true}))
+
+	require.Empty(t, f.Blockers(calBv), "過去向けに新規ブロッカーを作らない")
+	m, err := e.Store.GetMapping("a", "primary", "a-ev", "b")
+	require.NoError(t, err)
+	require.NotNil(t, m)
+	require.Equal(t, store.StatusSuppressed, m.Status, "suppressed のまま残す")
+}
+
+// 過去側ガード(レビュー指摘): 日次リコンサイルの reevaluateSuppressed も
+// 過去 origin の suppressed を昇格しない
+func TestReconcile_ReevaluateSuppressedSkipsPast(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	origin, real := dupPair(false)
+
+	require.NoError(t, e.Store.UpsertEvent(calBv, real))
+	f.SetFullState(refA, []model.NormalizedEvent{origin})
+	require.NoError(t, e.SyncCalendar(ctx, refA))
+	require.Empty(t, f.Blockers(calBv), "suppressed の前提")
+
+	// b 上の重複実予定のキャッシュ行だけが消えた状態(promote の取り逃がし相当)で
+	// 双方が過去に抜けてから日次リコンサイルが走る
+	require.NoError(t, e.Store.DeleteEvent(calBv, "b-ev"))
+	f.SetFullState(refA, nil)
+	f.SetFullState(model.CalendarRef{AccountID: "b", CalendarID: "primary"}, nil)
+	f.SetFullState(model.CalendarRef{AccountID: "c", CalendarID: "primary"}, nil)
+	e.Now = func() time.Time { return testNow.AddDate(0, 0, 10) }
+
+	require.NoError(t, e.Reconcile(ctx))
+	require.Empty(t, f.Blockers(calBv), "reevaluateSuppressed も過去向けに作らない")
+}
+
+// 過去側ガード(レビュー指摘): 過去化した pending intent は破棄し、過去向けに
+// ブロッカーを作らない
+func TestResolvePending_DropsPastIntent(t *testing.T) {
+	e, _ := newTestEngine(t)
+	ctx := context.Background()
+	ev := busyEvent("ev-p")
+	require.NoError(t, e.Store.UpsertEvent(refA, ev))
+	require.NoError(t, e.Store.PutMapping(store.Mapping{
+		OriginAccount: "a", OriginCalendar: "primary", OriginEventID: "ev-p",
+		TargetAccount: "b", TargetCalendar: "primary",
+		IdempotencyKey: "k-p", TimeHash: model.TimeHash(ev), Status: store.StatusPending,
+	}))
+
+	e.Now = func() time.Time { return testNow.AddDate(0, 0, 10) }
+	require.NoError(t, e.resolvePending(ctx))
+
+	m, err := e.Store.GetMapping("a", "primary", "ev-p", "b")
+	require.NoError(t, err)
+	require.Nil(t, m, "過去化した intent は破棄する")
+}
+
+// DB 全損からの復旧(レビュー指摘): 過去ブロッカーは列挙対象外(時刻下限付き
+// ListBlockers)のため、削除も収容もされず「管理外の履歴」としてカレンダーに残る。
+// 変更前は MS(窓なし列挙)で全削除・Google で孤児化と挙動が割れていた。
+func TestReconcile_AfterDBLossKeepsPastBlockersUntouched(t *testing.T) {
+	e, f := newTestEngine(t)
+	ctx := context.Background()
+	ev := busyEvent("ev-past")
+	f.SetFullState(refA, []model.NormalizedEvent{ev})
+	require.NoError(t, e.SyncCalendar(ctx, refA))
+	require.Len(t, f.Blockers(calBv), 1)
+	pastBlockerID := f.Blockers(calBv)[0].EventID
+
+	// DB 全損: 新しい空 store で同じ fake・同じ設定のエンジンを組み立てる
+	st2, err := store.Open(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st2.Close()) })
+	e2 := &Engine{Store: st2, Providers: e.Providers, Cfg: e.Cfg, Now: func() time.Time { return testNow.AddDate(0, 0, 10) }}
+
+	f.SetFullState(refA, nil)
+	f.SetFullState(model.CalendarRef{AccountID: "b", CalendarID: "primary"}, nil)
+	f.SetFullState(model.CalendarRef{AccountID: "c", CalendarID: "primary"}, nil)
+
+	require.NoError(t, e2.Reconcile(ctx))
+
+	blks := f.Blockers(calBv)
+	require.Len(t, blks, 1, "過去ブロッカーは削除されない")
+	require.Equal(t, pastBlockerID, blks[0].EventID)
+	m, err := e2.Store.GetMapping("a", "primary", "ev-past", "b")
+	require.NoError(t, err)
+	require.Nil(t, m, "時刻下限付き列挙のため mappings には再収容されない(管理外の履歴)")
+}

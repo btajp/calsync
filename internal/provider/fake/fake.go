@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/btajp/calsync/internal/model"
 	"github.com/btajp/calsync/internal/provider"
@@ -201,8 +202,37 @@ func (f *Fake) DeleteBlocker(ctx context.Context, cal model.CalendarRef, eventID
 }
 
 func (f *Fake) ListBlockers(ctx context.Context, cal model.CalendarRef, window model.Window) ([]model.BlockerRecord, error) {
-	// fake はウィンドウでフィルタしない(リコンサイルテストを単純に保つ)
-	return f.Blockers(cal), nil
+	// 実プロバイダと同じ契約(2026-08-05): 「終了がウィンドウ開始以降」のブロッカー
+	// だけを列挙する(Google は TimeMin、Graph は end/dateTime の $filter 下限)。
+	// 過去ブロッカーは保持されたまま列挙対象外になる。テスト用の全件取得は
+	// Blockers() ヘルパを使うこと。
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := f.state(cal)
+	recs := make([]model.BlockerRecord, 0, len(st.blockers))
+	for _, b := range st.blockers {
+		if blockerEndsBefore(b.body, window.Start) {
+			continue
+		}
+		recs = append(recs, b.rec)
+	}
+	return recs, nil
+}
+
+// blockerEndsBefore は engine.EndsBeforeWindow と同じ近似(終日は AllDayEnd の
+// UTC 日付・パース不能は false)でブロッカーの過去判定を行う。
+func blockerEndsBefore(b model.Blocker, windowStart time.Time) bool {
+	if b.IsAllDay {
+		end, err := time.Parse("2006-01-02", b.AllDayEnd)
+		if err != nil {
+			return false
+		}
+		return !end.After(windowStart)
+	}
+	if b.EndUTC.IsZero() {
+		return false
+	}
+	return !b.EndUTC.After(windowStart)
 }
 
 func (f *Fake) GetCalendarTimezone(ctx context.Context, cal model.CalendarRef) (string, error) {
