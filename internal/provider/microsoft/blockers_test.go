@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -315,13 +316,16 @@ func TestListBlockers(t *testing.T) {
 		{EventID: "blk-2", OriginTag: "work:ev2", TimeHash: wantAllDayHash},
 	}, recs)
 
-	// 列挙: $filter(value ne null)。GUID の { } が URL エンコードされていること
+	// 列挙: $filter(value ne null + 時刻下限)。GUID の { } が URL エンコードされていること。
+	// 時刻下限はウィンドウ開始(UTC)の end/dateTime ge(2026-08-05 過去ブロッカー保持:
+	// 蓄積した過去分を毎回列挙しないための下限。Google の TimeMin と同じ契約)
 	require.Len(t, reqs, 3)
 	u0, err := url.Parse(reqs[0].URL)
 	require.NoError(t, err)
 	require.Equal(t, "/me/events", u0.Path)
 	require.Equal(t,
-		"singleValueExtendedProperties/Any(ep: ep/id eq '"+wantOriginPropID+"' and ep/value ne null)",
+		"singleValueExtendedProperties/Any(ep: ep/id eq '"+wantOriginPropID+"' and ep/value ne null)"+
+			" and end/dateTime ge '"+testWindow.Start.UTC().Format("2006-01-02T15:04:05")+"'",
 		u0.Query().Get("$filter"))
 	require.Contains(t, reqs[0].URL, "%7Bb7dbd76c-3a35-4b41-9d80-6a3f31f2a6b9%7D")
 
@@ -469,4 +473,39 @@ func TestBlockerSensitivityMapping(t *testing.T) {
 			require.Equal(t, tc.want, body["sensitivity"])
 		})
 	}
+}
+
+// TestListBlockersFallsBackWhenTimeFilterRejected は、時刻下限付き $filter が
+// 400 で拒否された場合(拡張プロパティとの組合せは実 API 未実測 — 仕様書 15 章)に、
+// 時刻条件なしの従来 $filter で 1 回だけ再試行することを確認する。
+func TestListBlockersFallsBackWhenTimeFilterRejected(t *testing.T) {
+	var filters []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/me/events", func(w http.ResponseWriter, r *http.Request) {
+		f := r.URL.Query().Get("$filter")
+		filters = append(filters, f)
+		if strings.Contains(f, "end/dateTime") {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":{"code":"ErrorInvalidUrlQueryFilter"}}`)
+			return
+		}
+		fmt.Fprint(w, `{"value":[{"id":"blk-1"}]}`)
+	})
+	mux.HandleFunc("/me/events/blk-1", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"id":"blk-1","isAllDay":false,
+			"start":{"dateTime":"2026-07-10T01:00:00.0000000","timeZone":"UTC"},
+			"end":{"dateTime":"2026-07-10T02:00:00.0000000","timeZone":"UTC"},
+			"singleValueExtendedProperties":[{"id":"String {b7dbd76c-3a35-4b41-9d80-6a3f31f2a6b9} Name calsyncOrigin","value":"personal:ev1"}]}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL, []string{"busy"})
+	recs, err := c.ListBlockers(context.Background(), testCal, testWindow)
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	require.Equal(t, "blk-1", recs[0].EventID)
+	require.Len(t, filters, 2, "時刻下限付き → 拒否 → 条件なしで再試行の 2 回")
+	require.Contains(t, filters[0], "end/dateTime ge")
+	require.NotContains(t, filters[1], "end/dateTime")
 }

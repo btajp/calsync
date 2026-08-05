@@ -216,6 +216,16 @@ func (e *Engine) resolvePending(ctx context.Context) error {
 			}
 			continue
 		}
+		// 過去側ガード(2026-08-05 仕様変更): 過去向けに新規ブロッカーは作らない。
+		// 作成途中クラッシュの intent の origin が既に終わっていた場合は intent を
+		// 破棄する(クラッシュ前に作成まで済んでいた場合は孤児として残るが、
+		// 時刻下限付きの ListBlockers には現れないため以後触られない)
+		if EndsBeforeWindow(e.currentWindow(), *ev) {
+			if err := e.Store.DeleteMapping(m.OriginAccount, m.OriginCalendar, m.OriginEventID, m.TargetAccount); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
 		if err := e.createFromMapping(ctx, m, *ev); err != nil {
 			errs = append(errs, err)
 		}
@@ -507,6 +517,11 @@ func (e *Engine) reevaluateSuppressed(ctx context.Context) error {
 			}
 			target := e.Cfg.AccountByID(m.TargetAccount)
 			if target == nil {
+				continue
+			}
+			// 過去側ガード(2026-08-05 仕様変更): 過去向けに新規ブロッカーは作らない
+			// (promoteSuppressed と同じ。過去の時間帯に突然「予定あり」が湧くのを防ぐ)
+			if EndsBeforeWindow(e.currentWindow(), *ev) {
 				continue
 			}
 			dup, err := e.isDuplicateOnTarget(*target, *ev)

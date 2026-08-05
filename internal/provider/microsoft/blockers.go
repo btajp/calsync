@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -204,20 +205,41 @@ func (c *Client) DeleteBlocker(ctx context.Context, cal model.CalendarRef, event
 // matching event IDs first, then fetches each event with $expand to read the
 // origin tag and times for the BlockerRecord.
 func (c *Client) ListBlockers(ctx context.Context, cal model.CalendarRef, window model.Window) ([]model.BlockerRecord, error) {
-	q := url.Values{}
-	q.Set("$filter", fmt.Sprintf(
+	// 過去ブロッカー保持(2026-08-05 仕様変更)に伴い、Google の TimeMin と同じ
+	// 「終了がウィンドウ開始以降」の時刻下限を $filter に付ける。これが無いと、
+	// 掃除されず蓄積し続ける過去ブロッカーを毎リコンサイルで全列挙+1 件ずつ GET する
+	// ことになり、API コストが際限なく線形成長する(レビュー指摘)。
+	// 拡張プロパティとの組合せ $filter は実 API 未実測(仕様書 15 章スパイク)のため、
+	// 400 で拒否された場合は時刻条件なしで 1 回だけ再試行して従来挙動に戻す。
+	base := fmt.Sprintf(
 		"singleValueExtendedProperties/Any(ep: ep/id eq '%s' and ep/value ne null)",
-		originPropertyID))
+		originPropertyID)
+	bounded := base + fmt.Sprintf(" and end/dateTime ge '%s'",
+		window.Start.UTC().Format("2006-01-02T15:04:05"))
+	records, status, err := c.listBlockersFiltered(ctx, bounded)
+	if err != nil && status == http.StatusBadRequest {
+		log.Printf("graph list blockers: time-bounded filter rejected, falling back to unbounded: %v", err)
+		records, _, err = c.listBlockersFiltered(ctx, base)
+	}
+	return records, err
+}
+
+// listBlockersFiltered は指定 $filter でブロッカーを列挙する。エラー時は
+// 呼び出し元がフォールバック判断に使えるよう HTTP ステータスも返す
+// (HTTP 層以外のエラーは status 0)。
+func (c *Client) listBlockersFiltered(ctx context.Context, filter string) ([]model.BlockerRecord, int, error) {
+	q := url.Values{}
+	q.Set("$filter", filter)
 	listURL := c.baseURL + "/me/events?" + encodeQuery(q)
 
 	var records []model.BlockerRecord
 	for listURL != "" {
 		status, body, err := c.doRead(ctx, http.MethodGet, listURL, nil)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if status != http.StatusOK {
-			return nil, fmt.Errorf("graph list blockers: status %d: %s", status, body)
+			return nil, status, fmt.Errorf("graph list blockers: status %d: %s", status, body)
 		}
 		var page struct {
 			Value []struct {
@@ -226,18 +248,18 @@ func (c *Client) ListBlockers(ctx context.Context, cal model.CalendarRef, window
 			NextLink string `json:"@odata.nextLink"`
 		}
 		if err := json.Unmarshal(body, &page); err != nil {
-			return nil, fmt.Errorf("graph list blockers: decode: %w", err)
+			return nil, 0, fmt.Errorf("graph list blockers: decode: %w", err)
 		}
 		for _, item := range page.Value {
 			rec, err := c.getBlockerRecord(ctx, item.ID)
 			if err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			records = append(records, rec)
 		}
 		listURL = page.NextLink
 	}
-	return records, nil
+	return records, http.StatusOK, nil
 }
 
 // getBlockerRecord fetches one event with $expand to read the origin tag
